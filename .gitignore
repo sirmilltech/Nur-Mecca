@@ -1,6 +1,11 @@
+# dependencies
 node_modules/
-ios/
-android/
+
+# build output
 www/build/
+
+# env
 .env
+
+# system
 .DS_Store
