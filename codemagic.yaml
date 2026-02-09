@@ -37,7 +37,3 @@ workflows:
     artifacts:
       - build/**/*.ipa
       - build/**/*.xcarchive
-
-    publishing:
-      app_store_connect:
-        auth: integration
