@@ -1,13 +1,13 @@
 workflows:
   ios-capacitor:
-    name: iOS Capacitor Build (Nur-Mecca)
+    name: iOS Capacitor Build
     max_build_duration: 60
 
     environment:
       node: 22
-      vars:
-        XCODE_PROJECT: "ios/App/App.xcodeproj"
-        XCODE_SCHEME: "App"
+      ios_signing:
+        distribution_type: development
+        bundle_identifier: com.milltech.nurmecca
 
     scripts:
       - name: Install dependencies
@@ -16,7 +16,7 @@ workflows:
 
       - name: Build web assets
         script: |
-          echo "Static site – skipping build"
+          echo "Using static web assets from www"
 
       - name: Sync Capacitor
         script: |
@@ -25,11 +25,11 @@ workflows:
       - name: Build iOS app
         script: |
           xcodebuild \
-            -project "$XCODE_PROJECT" \
-            -scheme "$XCODE_SCHEME" \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
             -configuration Release \
             -sdk iphoneos \
             -archivePath build/App.xcarchive archive
 
     artifacts:
-      - build/**/*.xcarchive
+      - build/App.xcarchive
