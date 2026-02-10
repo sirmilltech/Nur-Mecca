@@ -6,8 +6,9 @@ workflows:
     environment:
       node: 22
       ios_signing:
-        distribution_type: development
+        distribution_type:  app_store
         bundle_identifier: com.milltech.nurmecca
+
 
     scripts:
       - name: Install dependencies
