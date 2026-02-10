@@ -1,35 +1,30 @@
-workflows:
-  ios-capacitor:
-    name: iOS Capacitor Build
-    max_build_duration: 60
+scripts:
+  - name: Install dependencies
+    script: |
+      npm install
 
-    environment:
-      node: 22
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.milltech.nurmecca.app
+  - name: Build web assets
+    script: |
+      echo "Using static web assets from www"
 
-    scripts:
-      - name: Install dependencies
-        script: |
-          npm install
+  - name: Sync Capacitor
+    script: |
+      npx cap sync ios
 
-      - name: Build web assets
-        script: |
-          echo "Using static web assets from www"
+  - name: Set up code signing
+    script: |
+      keychain initialize
+      app-store-connect fetch-signing-files com.milltech.nurmecca.app --type IOS_APP_STORE
+      keychain add-certificates
+      xcode-project use-profiles
 
-      - name: Sync Capacitor
-        script: |
-          npx cap sync ios
-
-      - name: Build iOS app
-        script: |
-          xcodebuild \
-            -project ios/App/App.xcodeproj \
-            -scheme App \
-            -configuration Release \
-            -sdk iphoneos \
-            -archivePath build/App.xcarchive archive
-
-    artifacts:
-      - build/App.xcarchive
+  - name: Build iOS app
+    script: |
+      xcodebuild \
+        -project ios/App/App.xcodeproj \
+        -scheme App \
+        -configuration Release \
+        -sdk iphoneos \
+        -archivePath build/App.xcarchive \
+        -allowProvisioningUpdates \
+        archive
