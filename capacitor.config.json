@@ -1,5 +1,6 @@
-{
-  "appId": "com.milltech.nurmecca",
-  "appName": "Nur Mecca",
-  "webDir": "www"
-}
+const config: CapacitorConfig = {
+  appId: 'com.milltech.nurmecca',
+  appName: 'Nur-Mecca',
+  webDir: 'dist',
+  bundledWebRuntime: false
+};
