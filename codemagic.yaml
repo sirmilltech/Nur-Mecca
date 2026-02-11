@@ -14,32 +14,15 @@ workflows:
         script: |
           npm install
 
-      - name: Build web assets
-        script: |
-          echo "Using static web assets from www"
-
       - name: Sync Capacitor
         script: |
           npx cap sync ios
 
-      - name: Set up code signing
+      - name: Build iOS
         script: |
-          keychain initialize
-          # Added --create flag to tell Codemagic to generate the profile if it is missing
-          app-store-connect fetch-signing-files com.milltech.nurmecca.app --type IOS_APP_STORE --create
-          keychain add-certificates
-          xcode-project use-profiles
-
-      - name: Build iOS app
-        script: |
-          xcodebuild \
-            -project ios/App/App.xcodeproj \
-            -scheme App \
-            -configuration Release \
-            -sdk iphoneos \
-            -archivePath build/App.xcarchive \
-            -allowProvisioningUpdates \
-            archive
+          xcode-project build-ipa \
+            --project ios/App/App.xcodeproj \
+            --scheme App
 
     artifacts:
-      - build/App.xcarchive
+      - build/ios/ipa/*.ipa
