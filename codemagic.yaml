@@ -25,6 +25,7 @@ workflows:
       - name: Set up code signing
         script: |
           keychain initialize
+          # Added --create flag to tell Codemagic to generate the profile if it is missing
           app-store-connect fetch-signing-files com.milltech.nurmecca.app --type IOS_APP_STORE --create
           keychain add-certificates
           xcode-project use-profiles
