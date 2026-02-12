@@ -29,11 +29,11 @@ workflows:
           xcode-project use-profiles
       - name: Build iOS App
         script: |
-          # This command builds the .ipa and automatically handles the "Development Team" requirement
+          # Fixed the argument error by quoting the flag value and ensuring clear separation
           xcode-project build-ipa \
             --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME" \
-            --archive-flags "-allowProvisioningUpdates"
+            --archive-flags="-allowProvisioningUpdates"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
