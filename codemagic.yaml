@@ -21,23 +21,23 @@ workflows:
       - name: Configure Signing & Profiles
         script: |
           keychain initialize
-          # Fetch signing files using the keys from your apple_auth group
+          # Fixed: Removed unrecognized --bundle-id flag. 
+          # The BUNDLE_ID is passed directly after fetch-signing-files.
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
-            --create \
-            --bundle-id "$BUNDLE_ID"
+            --create
           keychain add-certificates
-          # FORCE the project to use the fetched profiles by overwriting project settings
-          xcode-project use-profiles --force
+          # Fixed: Removed --force as it's not supported in this CLI version.
+          # use-profiles alone is sufficient once certificates are in the keychain.
+          xcode-project use-profiles
       - name: Build iOS App
         script: |
-          # We manually set CODE_SIGNING_ALLOWED=NO for the archive to prevent the "Select Profile" error,
-          # then we let the build-ipa tool handle the signature during the export phase.
+          # Optimized build command for CI environments
           xcode-project build-ipa \
             --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME" \
             --archive-xcargs "CODE_SIGNING_ALLOWED=NO" \
-            --export-flags="-allowProvisioningUpdates"
+            --export-xcargs "-allowProvisioningUpdates"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
