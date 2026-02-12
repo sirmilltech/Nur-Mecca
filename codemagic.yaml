@@ -21,7 +21,7 @@ workflows:
       - name: Configure Signing & Profiles
         script: |
           keychain initialize
-          # Fetch signing files
+          # Fetch signing files using the keys from your apple_auth group
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create \
@@ -31,11 +31,13 @@ workflows:
           xcode-project use-profiles --force
       - name: Build iOS App
         script: |
-          # Build the IPA using the forced profile settings
+          # We manually set CODE_SIGNING_ALLOWED=NO for the archive to prevent the "Select Profile" error,
+          # then we let the build-ipa tool handle the signature during the export phase.
           xcode-project build-ipa \
             --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME" \
-            --archive-flags="-allowProvisioningUpdates"
+            --archive-xcargs "CODE_SIGNING_ALLOWED=NO" \
+            --export-flags="-allowProvisioningUpdates"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
