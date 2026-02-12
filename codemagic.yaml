@@ -29,7 +29,6 @@ workflows:
       - name: Build iOS App
         script: |
           # 1. Manually find the Profile UUID and Name
-          # Codemagic stores these in ~/Library/MobileDevice/Provisioning Profiles
           PROV_PROFILE_PATH=$(ls "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision | head -n 1)
           PROV_PROFILE_NAME=$(basename "$PROV_PROFILE_PATH" .mobileprovision)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
@@ -37,7 +36,13 @@ workflows:
           echo "Using Profile Name: $PROV_PROFILE_NAME"
           echo "Using Profile UUID: $PROV_PROFILE_UUID"
 
-          # 2. Generate ExportOptions.plist
+          # 2. FORCE apply the UUID to the Project file to stop the "Requires a provisioning profile" error
+          # This replaces any existing ProvisioningStyle or Profile entries with our verified UUID
+          sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$XCODE_PROJECT/project.pbxproj"
+          sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
+          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
+
+          # 3. Generate ExportOptions.plist
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -58,8 +63,7 @@ workflows:
           </plist>
           EOF
 
-          # 3. Native Archive with Manual Signing
-          # We provide the UUID here to ensure the archive is "Valid" for export
+          # 4. Native Archive with Manual Signing
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -69,9 +73,9 @@ workflows:
             archive \
             CODE_SIGN_STYLE=Manual \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES
+            DEVELOPMENT_TEAM="$TEAM_ID"
 
-          # 4. Export IPA
+          # 5. Export IPA
           xcodebuild \
             -exportArchive \
             -archivePath "build/ios/xcarchive/App.xcarchive" \
