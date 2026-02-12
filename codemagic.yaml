@@ -28,13 +28,35 @@ workflows:
           xcode-project use-profiles
       - name: Build iOS App
         script: |
-          # We use the --ignore-signing flag which allows the archive to complete
-          # without a profile, then the tool applies the signing during export.
+          # 1. Generate a manual ExportOptions.plist to force the correct profile
+          # This ensures Xcode knows exactly which profile to use during export.
+          cat <<EOF > ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>$BUNDLE_ID</key>
+                  <string>$(ls /Users/builder/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | xargs basename -s .mobileprovision | head -n 1)</string>
+              </dict>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>teamID</key>
+              <string>$TEAM_ID</string>
+          </dict>
+          </plist>
+          EOF
+
+          # 2. Build the IPA using manual signing flags
+          # We use --archive-xcargs to bypass the initial signing check
           xcode-project build-ipa \
             --project="$XCODE_PROJECT" \
             --scheme="$XCODE_SCHEME" \
-            --ignore-signing \
-            --export-flags="-allowProvisioningUpdates"
+            --archive-xcargs="CODE_SIGNING_ALLOWED=NO" \
+            --export-options-plist="ExportOptions.plist"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
