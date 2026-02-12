@@ -31,23 +31,18 @@ workflows:
           # 1. Extract verified metadata from the downloaded profile
           PROV_PROFILE_PATH=$(ls "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
-          # Extract Team ID directly from the profile to be 100% sure it matches
+          # Extract Team ID directly from the profile
           PROFILE_TEAM_ID=$(grep -aA1 "ApplicationIdentifierPrefix" "$PROV_PROFILE_PATH" | grep -oE "[A-Z0-9]{10}" | head -n 1)
           
           echo "Using Profile UUID: $PROV_PROFILE_UUID"
           echo "Detected Team ID: $PROFILE_TEAM_ID"
 
           # 2. ULTRA-AGGRESSIVE PROJECT PATCHING
-          # We are rewriting the project file to ensure NO configuration can claim it's missing a profile.
           PBXPROJ="$XCODE_PROJECT/project.pbxproj"
           
-          # Force Manual signing everywhere
+          # Force Manual signing and set IDs globally in the project file
           sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
-          
-          # Set the Team ID for all configurations
           sed -i '' "s/DEVELOPMENT_TEAM = .*/DEVELOPMENT_TEAM = $PROFILE_TEAM_ID;/g" "$PBXPROJ"
-          
-          # Force the Provisioning Profile UUID into every single configuration slot
           sed -i '' "s/PROVISIONING_PROFILE = .*/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
           sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = .*/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
           
@@ -72,18 +67,20 @@ workflows:
           </plist>
           EOF
 
-          # 4. Native Archive
-          # We pass the same values via CLI as a double-safety measure
+          # 4. Native Archive with Clean and Extra Flags
+          # 'clean' ensures we aren't using broken cached settings
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
             -sdk iphoneos \
             -configuration Release \
             -archivePath "build/ios/xcarchive/App.xcarchive" \
-            archive \
+            clean archive \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$PROFILE_TEAM_ID" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID"
+            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            ALLOW_PROVISIONING_DEVICE_REGISTRATION=YES
 
           # 5. Export IPA
           xcodebuild \
