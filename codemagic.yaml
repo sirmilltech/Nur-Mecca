@@ -30,13 +30,12 @@ workflows:
           xcode-project use-profiles
       - name: Build iOS App
         script: |
-          # The error was caused by the CLI expecting a specific format for xcargs.
-          # We are grouping the arguments to ensure the 'build-ipa' tool parses them correctly.
+          # Using the '=' syntax to prevent "expected one argument" errors in the CLI
           xcode-project build-ipa \
-            --project "$XCODE_PROJECT" \
-            --scheme "$XCODE_SCHEME" \
-            --archive-xcargs "CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO" \
-            --export-flags "-allowProvisioningUpdates"
+            --project="$XCODE_PROJECT" \
+            --scheme="$XCODE_SCHEME" \
+            --archive-xcargs="CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO" \
+            --export-flags="-allowProvisioningUpdates"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
