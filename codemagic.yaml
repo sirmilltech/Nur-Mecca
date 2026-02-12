@@ -28,11 +28,16 @@ workflows:
           xcode-project use-profiles
       - name: Build iOS App
         script: |
-          # 1. Manually find the Profile Name from the Codemagic environment
-          PROV_PROFILE=$(ls "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision | xargs basename -s .mobileprovision | head -n 1)
-          echo "Using Profile: $PROV_PROFILE"
+          # 1. Manually find the Profile UUID and Name
+          # Codemagic stores these in ~/Library/MobileDevice/Provisioning Profiles
+          PROV_PROFILE_PATH=$(ls "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision | head -n 1)
+          PROV_PROFILE_NAME=$(basename "$PROV_PROFILE_PATH" .mobileprovision)
+          PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
+          
+          echo "Using Profile Name: $PROV_PROFILE_NAME"
+          echo "Using Profile UUID: $PROV_PROFILE_UUID"
 
-          # 2. Generate ExportOptions.plist with explicit values
+          # 2. Generate ExportOptions.plist
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -43,17 +48,18 @@ workflows:
               <key>provisioningProfiles</key>
               <dict>
                   <key>$BUNDLE_ID</key>
-                  <string>$PROV_PROFILE</string>
+                  <string>$PROV_PROFILE_UUID</string>
               </dict>
               <key>signingStyle</key>
               <string>manual</string>
-              <key>thinning</key>
-              <string>&lt;none&gt;</string>
+              <key>teamID</key>
+              <string>$TEAM_ID</string>
           </dict>
           </plist>
           EOF
 
-          # 3. Native Archive (bypassing Codemagic wrapper to avoid Status 70)
+          # 3. Native Archive with Manual Signing
+          # We provide the UUID here to ensure the archive is "Valid" for export
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -61,12 +67,11 @@ workflows:
             -configuration Release \
             -archivePath "build/ios/xcarchive/App.xcarchive" \
             archive \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_ENTITLEMENTS="" \
-            CODE_SIGNING_DESIRED=NO
+            CODE_SIGN_STYLE=Manual \
+            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
 
-          # 4. Export IPA using the generated Plist
+          # 4. Export IPA
           xcodebuild \
             -exportArchive \
             -archivePath "build/ios/xcarchive/App.xcarchive" \
