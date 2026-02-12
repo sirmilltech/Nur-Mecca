@@ -21,23 +21,22 @@ workflows:
       - name: Configure Signing & Profiles
         script: |
           keychain initialize
-          # Fixed: Removed unrecognized --bundle-id flag. 
-          # The BUNDLE_ID is passed directly after fetch-signing-files.
+          # Fetch signing files using the keys from your apple_auth group
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create
           keychain add-certificates
-          # Fixed: Removed --force as it's not supported in this CLI version.
-          # use-profiles alone is sufficient once certificates are in the keychain.
+          # Apply profiles to the project
           xcode-project use-profiles
       - name: Build iOS App
         script: |
-          # Optimized build command for CI environments
+          # The error was caused by the CLI expecting a specific format for xcargs.
+          # We are grouping the arguments to ensure the 'build-ipa' tool parses them correctly.
           xcode-project build-ipa \
             --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME" \
-            --archive-xcargs "CODE_SIGNING_ALLOWED=NO" \
-            --export-xcargs "-allowProvisioningUpdates"
+            --archive-xcargs "CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO" \
+            --export-flags "-allowProvisioningUpdates"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
