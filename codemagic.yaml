@@ -28,20 +28,29 @@ workflows:
           xcode-project use-profiles
       - name: Build iOS App
         script: |
-          # 1. Manually find the Profile UUID and Name
+          # 1. Extract verified metadata from the downloaded profile
           PROV_PROFILE_PATH=$(ls "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision | head -n 1)
-          PROV_PROFILE_NAME=$(basename "$PROV_PROFILE_PATH" .mobileprovision)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
+          # Extract Team ID directly from the profile to be 100% sure it matches
+          PROFILE_TEAM_ID=$(grep -aA1 "ApplicationIdentifierPrefix" "$PROV_PROFILE_PATH" | grep -oE "[A-Z0-9]{10}" | head -n 1)
           
-          echo "Using Profile Name: $PROV_PROFILE_NAME"
           echo "Using Profile UUID: $PROV_PROFILE_UUID"
+          echo "Detected Team ID: $PROFILE_TEAM_ID"
 
-          # 2. FORCE apply the UUID to the Project file to stop the "Requires a provisioning profile" error
-          # This replaces any existing ProvisioningStyle or Profile entries with our verified UUID
-          sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$XCODE_PROJECT/project.pbxproj"
-          sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
-          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
-
+          # 2. ULTRA-AGGRESSIVE PROJECT PATCHING
+          # We are rewriting the project file to ensure NO configuration can claim it's missing a profile.
+          PBXPROJ="$XCODE_PROJECT/project.pbxproj"
+          
+          # Force Manual signing everywhere
+          sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
+          
+          # Set the Team ID for all configurations
+          sed -i '' "s/DEVELOPMENT_TEAM = .*/DEVELOPMENT_TEAM = $PROFILE_TEAM_ID;/g" "$PBXPROJ"
+          
+          # Force the Provisioning Profile UUID into every single configuration slot
+          sed -i '' "s/PROVISIONING_PROFILE = .*/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
+          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = .*/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
+          
           # 3. Generate ExportOptions.plist
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
@@ -58,12 +67,13 @@ workflows:
               <key>signingStyle</key>
               <string>manual</string>
               <key>teamID</key>
-              <string>$TEAM_ID</string>
+              <string>$PROFILE_TEAM_ID</string>
           </dict>
           </plist>
           EOF
 
-          # 4. Native Archive with Manual Signing
+          # 4. Native Archive
+          # We pass the same values via CLI as a double-safety measure
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -72,16 +82,15 @@ workflows:
             -archivePath "build/ios/xcarchive/App.xcarchive" \
             archive \
             CODE_SIGN_STYLE=Manual \
-            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
-            DEVELOPMENT_TEAM="$TEAM_ID"
+            DEVELOPMENT_TEAM="$PROFILE_TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID"
 
           # 5. Export IPA
           xcodebuild \
             -exportArchive \
             -archivePath "build/ios/xcarchive/App.xcarchive" \
             -exportPath "build/ios/ipa" \
-            -exportOptionsPlist ExportOptions.plist \
-            -allowProvisioningUpdates
+            -exportOptionsPlist ExportOptions.plist
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
