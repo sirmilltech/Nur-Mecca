@@ -10,6 +10,7 @@ workflows:
       vars:
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
+        BUNDLE_ID: "com.milltech.nurmecca.app"
       node: latest
       xcode: latest
     scripts:
@@ -20,16 +21,17 @@ workflows:
       - name: Configure Signing & Profiles
         script: |
           keychain initialize
-          # Fetch the signing files from Apple
-          app-store-connect fetch-signing-files "com.milltech.nurmecca.app" \
+          # Fetch signing files
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create \
-            --bundle-id "com.milltech.nurmecca.app"
+            --bundle-id "$BUNDLE_ID"
           keychain add-certificates
-          xcode-project use-profiles
+          # FORCE the project to use the fetched profiles by overwriting project settings
+          xcode-project use-profiles --force
       - name: Build iOS App
         script: |
-          # Fixed the argument error by quoting the flag value and ensuring clear separation
+          # Build the IPA using the forced profile settings
           xcode-project build-ipa \
             --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME" \
