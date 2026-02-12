@@ -7,6 +7,9 @@ workflows:
     environment:
       groups:
         - apple_auth 
+      vars:
+        XCODE_PROJECT: "ios/App/App.xcodeproj"
+        XCODE_SCHEME: "App"
       node: latest
       xcode: latest
     scripts:
@@ -17,7 +20,7 @@ workflows:
       - name: Configure Signing & Profiles
         script: |
           keychain initialize
-          # Added explicit bundle ID and forced a fresh fetch
+          # Fetch the signing files from Apple
           app-store-connect fetch-signing-files "com.milltech.nurmecca.app" \
             --type IOS_APP_STORE \
             --create \
@@ -26,13 +29,11 @@ workflows:
           xcode-project use-profiles
       - name: Build iOS App
         script: |
-          xcodebuild \
-            -project ios/App/App.xcodeproj \
-            -scheme App \
-            -configuration Release \
-            -sdk iphoneos \
-            -archivePath build/App.xcarchive \
-            -allowProvisioningUpdates \
-            archive
+          # This command builds the .ipa and automatically handles the "Development Team" requirement
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --archive-flags "-allowProvisioningUpdates"
     artifacts:
-      - build/App.xcarchive
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
