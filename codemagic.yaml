@@ -1,7 +1,7 @@
-# PROJECT NUR-MECCA | Force Profile Matching Config
+# PROJECT NUR-MECCA | Hybrid Automatic-to-Manual Signing
 workflows:
   ios-production:
-    name: Nur-Mecca iOS Team Build
+    name: Nur-Mecca iOS Automatic Build
     instance_type: mac_mini_m1
     max_build_duration: 120
     environment:
@@ -21,68 +21,41 @@ workflows:
       - name: Configure Signing & Profiles
         script: |
           keychain initialize
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --type IOS_APP_STORE \
-            --create
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           xcode-project use-profiles
-      - name: Build iOS App
+      - name: Build iOS App (Try Automatic Twice)
         script: |
-          # 1. Extract verified metadata from the downloaded profile
-          PROV_PROFILE_PATH=$(ls "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision | head -n 1)
-          PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
-          # Extract Team ID directly from the profile
-          PROFILE_TEAM_ID=$(grep -aA1 "ApplicationIdentifierPrefix" "$PROV_PROFILE_PATH" | grep -oE "[A-Z0-9]{10}" | head -n 1)
+          # Define the Archive command
+          ARCHIVE_CMD="xcodebuild -project $XCODE_PROJECT -scheme $XCODE_SCHEME -sdk iphoneos -configuration Release -archivePath build/ios/xcarchive/App.xcarchive archive"
           
-          echo "Using Profile UUID: $PROV_PROFILE_UUID"
-          echo "Detected Team ID: $PROFILE_TEAM_ID"
+          echo "🚀 ATTEMPT 1: Starting Automatic Archive..."
+          if $ARCHIVE_CMD; then
+            echo "✅ Attempt 1 Succeeded!"
+          else
+            echo "⚠️ Attempt 1 Failed. Cleaning and retrying..."
+            xcodebuild clean -project "$XCODE_PROJECT" -scheme "$XCODE_SCHEME"
+            
+            echo "🚀 ATTEMPT 2: Starting Automatic Archive (Retry)..."
+            if $ARCHIVE_CMD; then
+               echo "✅ Attempt 2 Succeeded!"
+            else
+               echo "❌ BOTH AUTOMATIC ATTEMPTS FAILED."
+               echo "--------------------------------------------------------"
+               echo "STEP-BY-STEP MANUAL PREPARATION GUIDE:"
+               echo "1. Log into developer.apple.com"
+               echo "2. Go to 'Certificates, Identifiers & Profiles'"
+               echo "3. Find your 'App Store' Provisioning Profile for $BUNDLE_ID"
+               echo "4. Copy the 'UUID' (e.g. 12345-ABCDE-6789...)"
+               echo "5. Note your 10-character 'Team ID'"
+               echo "6. Paste these into the Manual YAML I previously provided."
+               echo "--------------------------------------------------------"
+               exit 65
+            fi
+          fi
 
-          # 2. ULTRA-AGGRESSIVE PROJECT PATCHING
-          PBXPROJ="$XCODE_PROJECT/project.pbxproj"
-          
-          # Force Manual signing and set IDs globally in the project file
-          sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
-          sed -i '' "s/DEVELOPMENT_TEAM = .*/DEVELOPMENT_TEAM = $PROFILE_TEAM_ID;/g" "$PBXPROJ"
-          sed -i '' "s/PROVISIONING_PROFILE = .*/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
-          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = .*/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
-          
-          # 3. Generate ExportOptions.plist
-          cat <<EOF > ExportOptions.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store</string>
-              <key>provisioningProfiles</key>
-              <dict>
-                  <key>$BUNDLE_ID</key>
-                  <string>$PROV_PROFILE_UUID</string>
-              </dict>
-              <key>signingStyle</key>
-              <string>manual</string>
-              <key>teamID</key>
-              <string>$PROFILE_TEAM_ID</string>
-          </dict>
-          </plist>
-          EOF
-
-          # 4. Native Archive with Clean and Extra Flags
-          # 'clean' ensures we aren't using broken cached settings
-          xcodebuild \
-            -project "$XCODE_PROJECT" \
-            -scheme "$XCODE_SCHEME" \
-            -sdk iphoneos \
-            -configuration Release \
-            -archivePath "build/ios/xcarchive/App.xcarchive" \
-            clean archive \
-            CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="$PROFILE_TEAM_ID" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            ALLOW_PROVISIONING_DEVICE_REGISTRATION=YES
-
-          # 5. Export IPA
+      - name: Export IPA
+        script: |
           xcodebuild \
             -exportArchive \
             -archivePath "build/ios/xcarchive/App.xcarchive" \
@@ -90,4 +63,3 @@ workflows:
             -exportOptionsPlist ExportOptions.plist
     artifacts:
       - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
