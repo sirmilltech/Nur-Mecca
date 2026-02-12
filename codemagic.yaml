@@ -17,9 +17,11 @@ workflows:
       - name: Configure Signing & Profiles
         script: |
           keychain initialize
-          # We use double quotes and the explicit distribution type to force a match
-          # The --create flag tells Codemagic to generate the profile if it still can't find it
-          app-store-connect fetch-signing-files "com.milltech.nurmecca.app" --type IOS_APP_STORE --create
+          # Added explicit bundle ID and forced a fresh fetch
+          app-store-connect fetch-signing-files "com.milltech.nurmecca.app" \
+            --type IOS_APP_STORE \
+            --create \
+            --bundle-id "com.milltech.nurmecca.app"
           keychain add-certificates
           xcode-project use-profiles
       - name: Build iOS App
