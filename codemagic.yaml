@@ -1,28 +1,36 @@
+# PROJECT NUR-MECCA | Force Profile Matching Config
 workflows:
-  ios-capacitor:
-    name: iOS Capacitor Build
-    max_build_duration: 60
-
+  ios-production:
+    name: Nur-Mecca iOS Team Build
+    instance_type: mac_mini_m1
+    max_build_duration: 120
     environment:
-      node: 22
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.milltech.nurmecca.app
-
+      groups:
+        - apple_auth 
+      node: latest
+      xcode: latest
     scripts:
       - name: Install dependencies
-        script: |
-          npm install
-
+        script: npm install
       - name: Sync Capacitor
+        script: npx cap sync ios
+      - name: Configure Signing & Profiles
         script: |
-          npx cap sync ios
-
-      - name: Build iOS
+          keychain initialize
+          # We use double quotes and the explicit distribution type to force a match
+          # The --create flag tells Codemagic to generate the profile if it still can't find it
+          app-store-connect fetch-signing-files "com.milltech.nurmecca.app" --type IOS_APP_STORE --create
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: Build iOS App
         script: |
-          xcode-project build-ipa \
-            --project ios/App/App.xcodeproj \
-            --scheme App
-
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath build/App.xcarchive \
+            -allowProvisioningUpdates \
+            archive
     artifacts:
-      - build/ios/ipa/*.ipa
+      - build/App.xcarchive
