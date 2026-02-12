@@ -28,8 +28,11 @@ workflows:
           xcode-project use-profiles
       - name: Build iOS App
         script: |
-          # 1. Generate a manual ExportOptions.plist to force the correct profile
-          # This ensures Xcode knows exactly which profile to use during export.
+          # 1. Manually find the Profile Name from the Codemagic environment
+          PROV_PROFILE=$(ls "$HOME/Library/MobileDevice/Provisioning Profiles"/*.mobileprovision | xargs basename -s .mobileprovision | head -n 1)
+          echo "Using Profile: $PROV_PROFILE"
+
+          # 2. Generate ExportOptions.plist with explicit values
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -40,23 +43,36 @@ workflows:
               <key>provisioningProfiles</key>
               <dict>
                   <key>$BUNDLE_ID</key>
-                  <string>$(ls /Users/builder/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | xargs basename -s .mobileprovision | head -n 1)</string>
+                  <string>$PROV_PROFILE</string>
               </dict>
               <key>signingStyle</key>
               <string>manual</string>
-              <key>teamID</key>
-              <string>$TEAM_ID</string>
+              <key>thinning</key>
+              <string>&lt;none&gt;</string>
           </dict>
           </plist>
           EOF
 
-          # 2. Build the IPA using manual signing flags
-          # We use --archive-xcargs to bypass the initial signing check
-          xcode-project build-ipa \
-            --project="$XCODE_PROJECT" \
-            --scheme="$XCODE_SCHEME" \
-            --archive-xcargs="CODE_SIGNING_ALLOWED=NO" \
-            --export-options-plist="ExportOptions.plist"
+          # 3. Native Archive (bypassing Codemagic wrapper to avoid Status 70)
+          xcodebuild \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -sdk iphoneos \
+            -configuration Release \
+            -archivePath "build/ios/xcarchive/App.xcarchive" \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            CODE_SIGNING_DESIRED=NO
+
+          # 4. Export IPA using the generated Plist
+          xcodebuild \
+            -exportArchive \
+            -archivePath "build/ios/xcarchive/App.xcarchive" \
+            -exportPath "build/ios/ipa" \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
