@@ -28,23 +28,12 @@ workflows:
           xcode-project use-profiles
       - name: Build iOS App
         script: |
-          # 1. Manual Archive with strict flags to bypass signing blocks
-          # This creates the archive successfully even without local profiles.
-          xcodebuild \
-            -project "$XCODE_PROJECT" \
-            -scheme "$XCODE_SCHEME" \
-            -archivePath "build/ios/xcarchive/App.xcarchive" \
-            archive \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            COMPILER_INDEX_STORE_ENABLE=NO
-
-          # 2. Export the IPA using Codemagic's tool to handle the signature
-          # This takes the unsigned archive and signs it using the profiles fetched in Step 4.
+          # We use the --ignore-signing flag which allows the archive to complete
+          # without a profile, then the tool applies the signing during export.
           xcode-project build-ipa \
             --project="$XCODE_PROJECT" \
             --scheme="$XCODE_SCHEME" \
-            --archive-directory="build/ios/xcarchive" \
+            --ignore-signing \
             --export-flags="-allowProvisioningUpdates"
     artifacts:
       - build/ios/ipa/*.ipa
