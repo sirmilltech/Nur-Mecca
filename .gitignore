@@ -9,3 +9,44 @@ www/build/
 
 # system
 .DS_Store
+
+
+
+API Key: 23c68740-0952-48ad-ad59-f0467943bbb0675a415d-db10-4e4c-b7f6-af3145806c3d 
+
+
+
+Type
+App Store
+App ID
+Nur-Mecca(JBMD9M6ZPC.com.milltech.nurmecca.app)
+
+
+Generate a Provisioning Profile
+Download and Install
+Download and double click the following file to install your Provisioning Profile.
+
+Name:Nur-Mecca
+Type:App StoreApp ID:JBMD9M6ZPC.com.milltech.nurmecca.app
+
+Expires:2027/01/11
+
+
+
+NAME
+Codemagic
+
+KEY ID
+ZQ995AD296
+
+Issuer ID
+eba2ce03-c54a-447a-b1a5-d97006c92fe0
+
+
+Download certificate
+Codemagic has successfully generated a new password-protected code signing certificate. For security purposes, you can only download it once.
+Please take note of the password for certificate.
+
+Password for certificate:
+FGsr4HO8
+
