@@ -26,14 +26,18 @@ workflows:
           # 3. Import profiles
           xcode-project use-profiles
           
-          # 4. Force find the UUID and ensure it's exported to the environment
+          # 4. Extract UUID
           PROVISIONING_PROFILE_UUID=$(mobile-static find-profile-uuid --bundle-id "$BUNDLE_ID")
           echo "Found Profile UUID: $PROVISIONING_PROFILE_UUID"
           echo "export PROVISIONING_PROFILE_UUID=$PROVISIONING_PROFILE_UUID" >> $CM_ENV
+
+          # 5. FORCE DISABLE AUTOMATIC SIGNING in the project file
+          # This prevents the "Select a provisioning profile in the editor" error
+          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$XCODE_PROJECT/project.pbxproj"
+          sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$XCODE_PROJECT/project.pbxproj"
       - name: Build iOS App
         script: |
-          # We are now using both SPECIFIER and the direct PROVISIONING_PROFILE flag
-          # We also force the Identity to "Apple Distribution"
+          # Use the explicit PROVISIONING_PROFILE and identity flags
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
