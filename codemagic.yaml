@@ -27,27 +27,18 @@ workflows:
           echo "export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8" >> $CM_ENV
 
           # 3. Fetch signing files
+          # This downloads the profile and the certificate to the builder machine
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
-          xcode-project use-profiles
-
-          # 4. GLOBAL PBXPROJ PATCHING (Including Dependencies)
-          # Find the downloaded profile UUID
-          PROV_PROFILE_UUID=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
-          echo "Targeting Profile UUID: $PROV_PROFILE_UUID"
           
-          # Find all pbxproj files in the ios directory and force manual signing
-          # Fixed: Removed 'xcase' typo and ensured correct sed syntax for macOS
-          find ios -name "project.pbxproj" -exec sed -i '' "s/ProvisioningStyle = [A-Za-z]*;/ProvisioningStyle = Manual;/g" {} +
-          find ios -name "project.pbxproj" -exec sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" {} +
-          find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" {} +
-          find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" {} +
-          find ios -name "project.pbxproj" -exec sed -i '' "s/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g" {} +
-          find ios -name "project.pbxproj" -exec sed -i '' "s/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g" {} +
+          # 4. Apply Profiles to Project
+          # Instead of manual sed, we use the official tool to set the project to manual signing
+          xcode-project use-profiles --bundle-id "$BUNDLE_ID"
 
+          # 5. Export Profile for build step
+          PROV_PROFILE_UUID=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
-          # Ensure the profile UUID is available in this shell session
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -59,7 +50,6 @@ workflows:
             -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
             -authenticationKeyPath "$AUTH_KEY_PATH" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
