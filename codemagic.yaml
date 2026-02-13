@@ -20,55 +20,54 @@ workflows:
         script: npx cap sync ios
       - name: Self-Healing Signing & Project Repair
         script: |
-          # 1. API KEY & ENVIRONMENT SETUP
+          # 1. API KEY SETUP
           echo "Setting up App Store Connect API Key..."
           echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
-          echo "export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8" >> $CM_ENV
+          export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8
 
-          # 2. KEYCHAIN & CERTIFICATE INITIALIZATION
-          # Fixes: "No signing certificate found"
+          # 2. KEYCHAIN INITIALIZATION
           keychain initialize
-          keychain add-certificates
           
-          # 3. CLEANUP & FRESH PROFILE FETCH
-          # Fixes: Profile conflicts or stale cached profiles
-          rm -rf ~/Library/MobileDevice/Provisioning\ Profiles/*
+          # 3. FETCH CERTIFICATES & PROFILES
+          # Added --create flag to certificates to generate one if missing
+          echo "Fetching Certificates and Profiles from Apple..."
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           
-          # 4. DYNAMIC UUID EXTRACTION
-          PROV_PROFILE_PATH=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | head -n 1)
+          # 4. CERTIFICATE INSTALLATION
+          # This installs any certificates downloaded in the previous step
+          keychain add-certificates
+          
+          # 5. DYNAMIC UUID EXTRACTION
+          # We search more broadly for the profile if the default path is empty
+          PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
+          
           if [ -z "$PROV_PROFILE_PATH" ]; then
-            echo "ERROR: No provisioning profile was downloaded."
-            exit 1
+            echo "CRITICAL: No provisioning profile found. Attempting manual creation..."
+            # Try one last time with explicit type
+            app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+            PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           fi
-          PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
-          echo "Extracted Profile UUID: $PROV_PROFILE_UUID"
 
-          # 5. GLOBAL PROJECT REPAIR LOOP (The "Nuclear" Fix)
-          # This loop visits every project file (Main App + SPM Targets) to force alignment
-          # Fixes: "App requires a provisioning profile" and "CapApp-SPM signing error"
-          echo "Starting project-wide signing injection..."
+          if [ -z "$PROV_PROFILE_PATH" ]; then
+             echo "ERROR: Signing files could not be retrieved. Check App Store Connect API permissions."
+             exit 1
+          fi
+
+          PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
+          echo "Successfully bound to Profile UUID: $PROV_PROFILE_UUID"
+
+          # 6. GLOBAL PROJECT REPAIR LOOP
           find ios -name "project.pbxproj" | while read -r pbxproj; do
             echo "Repairing: $pbxproj"
-            # Force Manual Signing
             sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$pbxproj"
-            # Inject Team ID
             sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$pbxproj"
-            # Inject Profile UUID into all configurations
             sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
             sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
-            # Fix for SPM Wrapper targets that often stay stuck on "None"
-            sed -i '' "s/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
           done
-
-          # 6. FORCE RE-MAPPING VIA CLI
-          xcode-project use-profiles --bundle-id "$BUNDLE_ID"
 
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
-          # We use a combined flag set to ensure that even if the project settings
-          # are stubborn, the xcodebuild command overrides them at runtime.
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -84,7 +83,6 @@ workflows:
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
-            OTHER_CODE_SIGN_FLAGS="--keychain $CM_KEYCHAIN_PATH" \
             clean archive
     publishing:
       app_store_connect:
