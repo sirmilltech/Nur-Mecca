@@ -20,14 +20,18 @@ workflows:
           # 1. Initialize the keychain
           keychain initialize
           
-          # 2. Search everywhere for the uploaded .p12 file
+          # 2. Add certificates from the Codemagic Global Keystore
           keychain add-certificates --global-keystore
           
-          # 3. Use profiles without the unrecognized team-id flag
+          # 3. Import profiles and extract the UUID for the build
           xcode-project use-profiles
+          
+          # 4. Find the UUID of the profile we just imported to use in the build command
+          PROVISIONING_PROFILE_UUID=$(mobile-static find-profile-uuid --bundle-id "$BUNDLE_ID")
+          echo "export PROVISIONING_PROFILE_UUID=$PROVISIONING_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
-          # Injecting the Team ID and Manual style directly into the xcodebuild command
+          # Passing the UUID explicitly to fix the "Requires a provisioning profile" error
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -35,6 +39,7 @@ workflows:
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_UUID" \
             CODE_SIGN_STYLE=Manual \
             clean archive
     artifacts:
