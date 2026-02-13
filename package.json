@@ -1,9 +1,13 @@
 {
   "name": "nur-mecca",
   "version": "1.0.0",
-  "description": "",
+  "description": "Nur-Mecca Mobile Application",
   "main": "index.js",
   "scripts": {
+    "build": "npm run build",
+    "sync": "npx cap sync",
+    "ios:sync": "npx cap sync ios",
+    "android:sync": "npx cap sync android",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -11,9 +15,9 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "@capacitor/android": "^8.0.2",
-    "@capacitor/cli": "^8.0.2",
-    "@capacitor/core": "^8.0.2",
-    "@capacitor/ios": "^8.0.2"
+    "@capacitor/android": "^6.0.0",
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/ios": "^6.0.0"
   }
 }

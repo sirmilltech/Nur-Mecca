@@ -1,6 +1,12 @@
+import { CapacitorConfig } from '@capacitor/cli';
+
 const config: CapacitorConfig = {
   appId: 'com.milltech.nurmecca.app',
-  appName: 'Nur-Mecca,
+  appName: 'Nur-Mecca', // Fixed missing closing quote here
   webDir: 'dist',
-  bundledWebRuntime: false
+  server: {
+    androidScheme: 'https'
+  }
 };
+
+export default config;
