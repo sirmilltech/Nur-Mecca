@@ -51,6 +51,8 @@ workflows:
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
+          # CODE_SIGNING_ALLOWED=NO is passed to prevent sub-targets from requiring their own identity
+          # AD_HOC_CODE_SIGNING_ALLOWED=YES allows local signing for dependencies
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -69,6 +71,8 @@ workflows:
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGN_ALLOW_CONSTANT_SIGNING_ERRORS=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
             clean archive
     artifacts:
       - build/ios/xcarchive/*.xcarchive
