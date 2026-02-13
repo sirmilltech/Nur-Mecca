@@ -80,8 +80,6 @@ workflows:
         auth: integration
         # Set to true to automatically submit to TestFlight
         submit_to_testflight: true
-        # Optional: set to true to wait for build processing to finish
-        wait_for_build_processing: true
     artifacts:
       - build/ios/xcarchive/*.xcarchive
       - /tmp/xcodebuild_logs/*.log
