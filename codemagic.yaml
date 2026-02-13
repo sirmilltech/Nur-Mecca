@@ -1,55 +1,39 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Manual Build
+    name: Nur-Mecca iOS Automatic Build
     max_build_duration: 60
     environment:
       groups:
-        - apple_auth 
+        - apple_auth # Ensure your App Store Connect API Key is in this group
       vars:
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
-        DEVELOPMENT_TEAM: "JBMD9M6ZPC" 
     scripts:
       - name: Install dependencies
         script: npm install
       - name: Capacitor Sync
         script: npx cap sync ios
-      - name: Set up code signing
+      - name: Prepare Signing
         script: |
-          # 1. Initialize the keychain
-          keychain initialize
-          
-          # 2. Add certificates from the Codemagic Global Keystore
-          keychain add-certificates --global-keystore
-          
-          # 3. Import profiles
+          # This script tells Codemagic to talk to Apple and 
+          # generate the profiles automatically so you don't have to.
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --create
           xcode-project use-profiles
-          
-          # 4. Extract UUID and set the exact Profile Name
-          PROVISIONING_PROFILE_UUID=$(mobile-static find-profile-uuid --bundle-id "$BUNDLE_ID")
-          echo "Found Profile UUID: $PROVISIONING_PROFILE_UUID"
-          echo "export PROVISIONING_PROFILE_UUID=$PROVISIONING_PROFILE_UUID" >> $CM_ENV
-
-          # 5. FORCE DISABLE AUTOMATIC SIGNING & SET TEAM globally
-          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$XCODE_PROJECT/project.pbxproj"
-          sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$XCODE_PROJECT/project.pbxproj"
       - name: Build iOS App
         script: |
-          # Use the 'PROVISIONING_PROFILE' override which often works better than 'SPECIFIER'
-          # Applying to all targets by omitting the specific target flag and using global overrides
+          # The -allowProvisioningUpdates flag is the key here. 
+          # It forces Xcode to ignore the project's internal errors.
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
             -sdk iphoneos \
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_UUID" \
-            PROVISIONING_PROFILE="$PROVISIONING_PROFILE_UUID" \
-            CODE_SIGN_ALLOW_CONSTANT_DECLARATION_VIOLATION=YES \
+            -allowProvisioningUpdates \
+            -authenticationKeyID "$AppStoreConnectKeyID" \
+            -authenticationKeyIssuerID "$AppStoreConnectIssuerID" \
+            -authenticationKeyPath "$AppStoreConnectKeyPath" \
             clean archive
     artifacts:
       - build/ios/xcarchive/*.xcarchive
