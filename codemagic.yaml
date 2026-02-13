@@ -35,43 +35,43 @@ workflows:
           echo "Found Profile UUID: $PROV_PROFILE_UUID"
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 4. TARGETED PROJECT REWRITE (Python)
-          # We force the ProvisioningProfile specifier into the build settings AND target attributes
+          # 4. TARGETED PROJECT METADATA REWRITE
+          # This script specifically targets the TargetAttributes and BuildConfigurations
           python3 - <<EOF
           import os
           import re
 
-          def force_manual_signing(file_path, uuid, team_id, bundle_id):
+          def force_signing(file_path, uuid, team_id, bundle_id):
               with open(file_path, 'r') as f:
                   content = f.read()
 
-              # Disable Automatic Signing
-              content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
+              # Force manual style in TargetAttributes (The core of the issue)
+              content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
               
-              # Force identifiers
-              content = re.sub(r'DevelopmentTeam = [A-Z0-9]*;', f'DevelopmentTeam = {team_id};', content)
-              content = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = .*?;', f'PRODUCT_BUNDLE_IDENTIFIER = "{bundle_id}";', content)
-              
-              # Ensure the Profile UUID is mapped to every configuration
+              # Map the profile UUID to every single build block
               content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = ".*?";', f'PROVISIONING_PROFILE_SPECIFIER = "{uuid}";', content)
               content = re.sub(r'PROVISIONING_PROFILE = ".*?";', f'PROVISIONING_PROFILE = "{uuid}";', content)
               
-              # Nuclear option: If PROVISIONING_PROFILE_SPECIFIER is missing in some blocks, inject it
-              if 'PROVISIONING_PROFILE_SPECIFIER' not in content:
-                  content = content.replace('PRODUCT_BUNDLE_IDENTIFIER = "{bundle_id}";', 
-                                          f'PRODUCT_BUNDLE_IDENTIFIER = "{bundle_id}";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{uuid}";')
+              # Ensure correct Team ID
+              content = re.sub(r'DevelopmentTeam = [A-Z0-9]*;', f'DevelopmentTeam = {team_id};', content)
+              
+              # Force the specific target to use the profile
+              if 'TargetAttributes' in content:
+                  content = re.sub(r'(TargetAttributes = \{.*?\};)', 
+                                   lambda m: m.group(1).replace('}', f'\t\t\t\t\t\t\tProvisioningStyle = Manual;\n\t\t\t\t\t\t\tDevelopmentTeam = {team_id};\n\t\t\t\t\t\t}}'), 
+                                   content, flags=re.DOTALL)
 
               with open(file_path, 'w') as f:
                   f.write(content)
-              print(f"Successfully patched {file_path}")
+              print(f"Patched {file_path}")
 
-          target_file = 'ios/App/App.xcodeproj/project.pbxproj'
-          if os.path.exists(target_file):
-              force_manual_signing(target_file, '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM', '$BUNDLE_ID')
+          target = 'ios/App/App.xcodeproj/project.pbxproj'
+          if os.path.exists(target):
+              force_signing(target, '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM', '$BUNDLE_ID')
           EOF
       - name: Build iOS App
         script: |
-          # Use -exportOptionsPlist generation via CLI flags
+          # Use -destination and explicit signing flags
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -86,7 +86,6 @@ workflows:
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             clean archive
     publishing:
       app_store_connect:
