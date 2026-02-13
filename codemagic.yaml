@@ -80,7 +80,6 @@ workflows:
     publishing:
       app_store_connect:
         auth: integration
-        # Set to true to automatically submit to TestFlight
         submit_to_testflight: true
     artifacts:
       - build/ios/xcarchive/*.xcarchive
