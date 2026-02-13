@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Automatic Build
+    name: Nur-Mecca iOS Manual Build
     max_build_duration: 60
     environment:
       groups:
@@ -16,8 +16,11 @@ workflows:
         script: npx cap sync ios
       - name: Set up code signing
         script: |
-          # Removed --project flag to resolve the "unrecognized arguments" error
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --create
+          # Use Codemagic's built-in command to prepare the manual files you just uploaded
+          keychain initialize
+          # This will automatically pick up the .p12 and .mobileprovision you uploaded to the UI
+          keychain add-certificates
+          xcode-project use-profiles
       - name: Build iOS App
         script: |
           xcodebuild \
@@ -26,7 +29,6 @@ workflows:
             -sdk iphoneos \
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
-            -allowProvisioningUpdates \
             clean archive
     artifacts:
       - build/ios/xcarchive/*.xcarchive
