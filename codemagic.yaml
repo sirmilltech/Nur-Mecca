@@ -32,26 +32,41 @@ workflows:
           # 3. EXTRACT PROFILE UUID
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
-          echo "Using Profile UUID: $PROV_PROFILE_UUID"
+          echo "Found Profile UUID: $PROV_PROFILE_UUID"
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 4. DEEP PROJECT REPAIR
-          # We force the project to Manual and bind the UUID directly into the pbxproj metadata
-          echo "Force-mapping UUID to all build configurations..."
-          find ios -name "project.pbxproj" | while read -r pbxproj; do
-            echo "Repairing: $pbxproj"
-            # Disable Automatic Signing
-            sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$pbxproj"
-            # Inject UUID into any empty specifiers
-            sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \"\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
-            # Ensure Team ID is correct
-            sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$pbxproj"
-            # Global override for provisioning profile variables
-            sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
-          done
+          # 4. FORCE REPAIR VIA PYTHON (More reliable than sed for nested blocks)
+          python3 - <<EOF
+          import os
+          import re
+
+          def repair_project(file_path, uuid, team_id, bundle_id):
+              with open(file_path, 'r') as f:
+                  content = f.read()
+
+              # Force Manual Style
+              content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
+              
+              # Replace empty or existing specifiers with the correct UUID
+              content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = ".*?";', f'PROVISIONING_PROFILE_SPECIFIER = "{uuid}";', content)
+              content = re.sub(r'PROVISIONING_PROFILE = ".*?";', f'PROVISIONING_PROFILE = "{uuid}";', content)
+              
+              # Ensure Team and Bundle ID match
+              content = re.sub(r'DevelopmentTeam = [A-Z0-9]*;', f'DevelopmentTeam = {team_id};', content)
+              content = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = .*?;', f'PRODUCT_BUNDLE_IDENTIFIER = {bundle_id};', content)
+
+              with open(file_path, 'w') as f:
+                  f.write(content)
+              print(f"Repaired {file_path}")
+
+          for root, dirs, files in os.walk('ios'):
+              for file in files:
+                  if file == 'project.pbxproj':
+                      repair_project(os.path.join(root, file), '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM', '$BUNDLE_ID')
+          EOF
       - name: Build iOS App
         script: |
-          # Use xcodebuild with explicit overrides to prevent fallback to 'Automatic'
+          # Use -exportArchive style flags to ensure the profile is baked in
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -67,7 +82,6 @@ workflows:
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             clean archive
     publishing:
       app_store_connect:
