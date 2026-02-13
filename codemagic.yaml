@@ -24,32 +24,29 @@ workflows:
           echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
           echo "export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8" >> $CM_ENV
 
-          # 2. Initialize Keychain
+          # 2. Initialize Keychain & Add Certificates
           keychain initialize
-          
-          # 3. Import Certificate (CRITICAL: You must have CM_CERTIFICATE in env vars)
-          # This pulls the .p12 file you uploaded to Codemagic
           keychain add-certificates
           
-          # 4. Fetch Profiles
+          # 3. Fetch Profiles (Forces Codemagic to download the latest profile from Apple)
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           
-          # 5. Extract Profile UUID
+          # 4. FIND THE PROFILE UUID (The most critical part)
           PROV_PROFILE_PATH=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
-          echo "Using Profile UUID: $PROV_PROFILE_UUID"
+          echo "Found Profile UUID: $PROV_PROFILE_UUID"
 
-          # 6. Force Manual Signing on ALL targets (including the failing SPM target)
+          # 5. INJECT PROFILE INTO XCODE (The Nuclear Option)
+          # This replaces "Automatic" with "Manual" and forces the UUID into the project file
           find ios -name "project.pbxproj" -exec sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' {} +
+          find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" {} +
+          find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" {} +
           find ios -name "project.pbxproj" -exec sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" {} +
-          
-          # Use the CLI tool to map the profile to the bundle ID
-          xcode-project use-profiles --bundle-id "$BUNDLE_ID"
 
+          # 6. Export for Build Step
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
-          # Simplified build command to reduce friction
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -62,7 +59,9 @@ workflows:
             -authenticationKeyPath "$AUTH_KEY_PATH" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             clean archive
     publishing:
       app_store_connect:
