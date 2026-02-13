@@ -18,6 +18,10 @@ workflows:
         script: npx cap sync ios
       - name: Prepare Signing
         script: |
+          # Git configuration
+          git config --global user.email "builder@codemagic.io"
+          git config --global user.name "Codemagic Builder"
+
           # 1. Create the .p8 key file
           echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
           echo "export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8" >> $CM_ENV
@@ -26,22 +30,22 @@ workflows:
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           xcode-project use-profiles
 
-          # 3. ADVANCED BRUTE FORCE: Force-patch the internal project file
+          # 3. TOTAL SLEDGEHAMMER: Force-patch the internal project file
           # We look for the most recently downloaded profile from Codemagic
           PROV_PROFILE_UUID=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
           echo "Force-Injecting Profile UUID: $PROV_PROFILE_UUID"
           
-          # Use 'sed' to overwrite all existing profile settings in the pbxproj
-          # This forces Xcode to accept our generated profile
           PBXPROJ="$XCODE_PROJECT/project.pbxproj"
+          
+          # Remove any "Automatic" signing flags and force the Profile UUID everywhere
           sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
           sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
           sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
           sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$PBXPROJ"
           
-          # Additional check: inject the UUID where it might be missing entirely
-          # This ensures the 'Release' configuration is explicitly linked
+          # Force the SDK specific profile setting which often causes the 'Select a profile' error
           sed -i '' "s/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
+          sed -i '' "s/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
 
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
