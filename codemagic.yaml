@@ -20,8 +20,14 @@ workflows:
         script: npx cap sync ios
       - name: Nuclear Signing Reset
         script: |
-          # 1. Setup API Key
-          echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
+          # 1. Recover API Key from environment (Base64 is safer)
+          # We try to decode it if it's base64, otherwise we take it as raw text
+          if [[ "$APP_STORE_CONNECT_PRIVATE_KEY" == *"-"* ]]; then
+            echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
+          else
+            echo "$APP_STORE_CONNECT_PRIVATE_KEY" | base64 --decode > /tmp/Apple_API_Key.p8
+          fi
+          
           export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8
 
           # 2. Fetch Profiles
@@ -34,7 +40,7 @@ workflows:
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 4. Create ExportOptions.plist (This bypasses the 'Select Profile' UI error)
+          # 4. Create ExportOptions.plist
           cat <<EOF > /tmp/exportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -57,15 +63,13 @@ workflows:
           </plist>
           EOF
 
-          # 5. Scrub the project file of 'TargetAttributes' that block the build
+          # 5. Scrub project of automatic-only attributes
           python3 - <<EOF
           import os, re
           path = 'ios/App/App.xcodeproj/project.pbxproj'
           if os.path.exists(path):
               with open(path, 'r') as f: content = f.read()
-              # Remove the entire TargetAttributes block for the App target
               content = re.sub(r'TargetAttributes = \{.*?\};', 'TargetAttributes = {};', content, flags=re.DOTALL)
-              # Force manual style
               content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
               with open(path, 'w') as f: f.write(content)
           EOF
