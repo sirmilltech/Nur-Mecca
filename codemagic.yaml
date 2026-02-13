@@ -3,7 +3,6 @@ workflows:
     name: Nur-Mecca iOS Automatic Build
     max_build_duration: 60
     integrations:
-      # Updated to match the name "Codemagic_Key" seen in your screenshot
       app_store_connect: "Codemagic_Key"
     environment:
       groups:
@@ -21,41 +20,36 @@ workflows:
         script: npx cap sync ios
       - name: Prepare Signing
         script: |
-          # 1. Set Git Identity
-          git config --global user.email "builder@codemagic.io"
-          git config --global user.name "Codemagic Builder"
-
-          # 2. Create the .p8 key file for App Store Connect API
+          # 1. API Key Setup
           echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
           echo "export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8" >> $CM_ENV
 
-          # 3. Keychain setup and Certificate installation
+          # 2. Initialize Keychain
           keychain initialize
           
-          # This command imports certificates from the environment variables (CM_CERTIFICATE, CM_CERTIFICATE_PASSWORD)
-          # Make sure you have uploaded your .p12 distribution certificate to Environment Variables
+          # 3. Import Certificate (CRITICAL: You must have CM_CERTIFICATE in env vars)
+          # This pulls the .p12 file you uploaded to Codemagic
           keychain add-certificates
           
-          # Force fetching and installing the profile
+          # 4. Fetch Profiles
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           
-          # 4. EXTREME PBXPROJ PATCHING & UUID EXTRACTION
+          # 5. Extract Profile UUID
           PROV_PROFILE_PATH=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
-          echo "Extracted UUID: $PROV_PROFILE_UUID"
+          echo "Using Profile UUID: $PROV_PROFILE_UUID"
 
-          # Deep patch for both the main project and the SPM wrapper to force Manual signing
+          # 6. Force Manual Signing on ALL targets (including the failing SPM target)
           find ios -name "project.pbxproj" -exec sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' {} +
           find ios -name "project.pbxproj" -exec sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" {} +
-          find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" {} +
-          find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" {} +
-
-          # 5. Apply Profiles via CLI
+          
+          # Use the CLI tool to map the profile to the bundle ID
           xcode-project use-profiles --bundle-id "$BUNDLE_ID"
 
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
+          # Simplified build command to reduce friction
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -66,17 +60,9 @@ workflows:
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
             -authenticationKeyPath "$AUTH_KEY_PATH" \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
-            CODE_SIGNING_REQUIRED=YES \
-            CODE_SIGNING_ALLOWED=YES \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            CODE_SIGN_ALLOW_CONSTANT_SIGNING_ERRORS=YES \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            OTHER_CODE_SIGN_FLAGS="--keychain $CM_KEYCHAIN_PATH" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             clean archive
     publishing:
       app_store_connect:
@@ -84,4 +70,3 @@ workflows:
         submit_to_testflight: true
     artifacts:
       - build/ios/xcarchive/*.xcarchive
-      - /tmp/xcodebuild_logs/*.log
