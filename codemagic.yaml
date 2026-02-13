@@ -35,43 +35,39 @@ workflows:
           echo "Found Profile UUID: $PROV_PROFILE_UUID"
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 4. TARGETED PROJECT METADATA REWRITE
-          # This script specifically targets the TargetAttributes and BuildConfigurations
+          # 4. DEEP REWRITE OF PROJECT FILE
           python3 - <<EOF
           import os
           import re
 
-          def force_signing(file_path, uuid, team_id, bundle_id):
+          def rewrite_project(file_path, uuid, team_id, bundle_id):
               with open(file_path, 'r') as f:
                   content = f.read()
 
-              # Force manual style in TargetAttributes (The core of the issue)
-              content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
+              # Force manual style everywhere
+              content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
               
-              # Map the profile UUID to every single build block
+              # Force identifiers and profiles in every configuration block
+              content = re.sub(r'DevelopmentTeam = [A-Z0-9]*;', f'DevelopmentTeam = {team_id};', content)
+              content = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = .*?;', f'PRODUCT_BUNDLE_IDENTIFIER = {bundle_id};', content)
               content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = ".*?";', f'PROVISIONING_PROFILE_SPECIFIER = "{uuid}";', content)
               content = re.sub(r'PROVISIONING_PROFILE = ".*?";', f'PROVISIONING_PROFILE = "{uuid}";', content)
               
-              # Ensure correct Team ID
-              content = re.sub(r'DevelopmentTeam = [A-Z0-9]*;', f'DevelopmentTeam = {team_id};', content)
-              
-              # Force the specific target to use the profile
+              # Special fix for TargetAttributes block
               if 'TargetAttributes' in content:
-                  content = re.sub(r'(TargetAttributes = \{.*?\};)', 
-                                   lambda m: m.group(1).replace('}', f'\t\t\t\t\t\t\tProvisioningStyle = Manual;\n\t\t\t\t\t\t\tDevelopmentTeam = {team_id};\n\t\t\t\t\t\t}}'), 
-                                   content, flags=re.DOTALL)
+                  content = re.sub(r'TargetAttributes = \{', 'TargetAttributes = {\n\t\t\t\t\t\t\t\tProvisioningStyle = Manual;', content)
 
               with open(file_path, 'w') as f:
                   f.write(content)
-              print(f"Patched {file_path}")
+              print(f"Patched: {file_path}")
 
-          target = 'ios/App/App.xcodeproj/project.pbxproj'
-          if os.path.exists(target):
-              force_signing(target, '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM', '$BUNDLE_ID')
+          target_path = 'ios/App/App.xcodeproj/project.pbxproj'
+          if os.path.exists(target_path):
+              rewrite_project(target_path, '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM', '$BUNDLE_ID')
           EOF
       - name: Build iOS App
         script: |
-          # Use -destination and explicit signing flags
+          # Explicitly bind the profile via CLI to override internal Xcode caching
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
