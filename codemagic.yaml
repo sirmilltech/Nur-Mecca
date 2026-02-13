@@ -4,12 +4,14 @@ workflows:
     max_build_duration: 60
     environment:
       groups:
-        - apple_auth # Ensure your App Store Connect API Key is in this group
+        - apple_auth 
       vars:
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
-        DEVELOPMENT_TEAM: "JBMD9M6ZPC" 
+        DEVELOPMENT_TEAM: "JBMD9M6ZPC"
+        # Adding your Key ID from the screenshot to ensure the connection is explicit
+        APP_STORE_CONNECT_KEY_IDENTIFIER: "U2SA5VYGH7"
     scripts:
       - name: Install dependencies
         script: npm install
@@ -17,19 +19,18 @@ workflows:
         script: npx cap sync ios
       - name: Prepare Signing
         script: |
-          # 1. Fetch signing files from Apple
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --create
+          # 1. Fetch signing files specifically for Distribution/App Store
+          # Since you uploaded a .p12 distribution certificate, we must target 'app-store' type
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           xcode-project use-profiles
 
-          # 2. FORCE INJECT Development Team into the project file
-          # This fixes the "requires a development team" error
+          # 2. Inject Team ID and force Manual style to stop Xcode from looking for "Accounts"
+          # This bypasses the "No Accounts: Add a new account" error
           sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$XCODE_PROJECT/project.pbxproj"
-          
-          # Ensure Manual style is set so it respects our Team ID
           sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$XCODE_PROJECT/project.pbxproj"
       - name: Build iOS App
         script: |
-          # Added DEVELOPMENT_TEAM flag to the build command
+          # We use 'archive' with the explicit key details from your screenshot
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -37,10 +38,11 @@ workflows:
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -allowProvisioningUpdates \
-            -authenticationKeyID "$AppStoreConnectKeyID" \
-            -authenticationKeyIssuerID "$AppStoreConnectIssuerID" \
-            -authenticationKeyPath "$AppStoreConnectKeyPath" \
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
+            -authenticationKeyPath "$APP_STORE_CONNECT_PRIVATE_KEY" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_STYLE=Manual \
             clean archive
     artifacts:
       - build/ios/xcarchive/*.xcarchive
