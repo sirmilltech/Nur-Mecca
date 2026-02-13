@@ -9,6 +9,8 @@ workflows:
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
+        # REPLACE THIS with the Team ID from your Apple Developer account if different
+        DEVELOPMENT_TEAM: "JBMD9M6ZPC" 
     scripts:
       - name: Install dependencies
         script: npm install
@@ -16,11 +18,10 @@ workflows:
         script: npx cap sync ios
       - name: Set up code signing
         script: |
-          # Use Codemagic's built-in command to prepare the manual files you just uploaded
           keychain initialize
-          # This will automatically pick up the .p12 and .mobileprovision you uploaded to the UI
           keychain add-certificates
-          xcode-project use-profiles
+          # This forces the project to use the profile you uploaded
+          xcode-project use-profiles --set-team-id="$DEVELOPMENT_TEAM"
       - name: Build iOS App
         script: |
           xcodebuild \
@@ -29,6 +30,7 @@ workflows:
             -sdk iphoneos \
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             clean archive
     artifacts:
       - build/ios/xcarchive/*.xcarchive
