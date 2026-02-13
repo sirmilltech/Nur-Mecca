@@ -12,9 +12,9 @@ workflows:
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
         # ----------------------------------------------------------------
-        # 1. PASTE YOUR 10-CHARACTER TEAM ID HERE (e.g., "ABC123DEFG")
+        # 1. PASTE YOUR 10-CHARACTER TEAM ID HERE
         MANUAL_TEAM_ID: "ZQ995AD296"
-        # 2. PASTE YOUR PROFILE UUID HERE (e.g., "12345678-abcd-...")
+        # 2. PASTE YOUR PROFILE UUID HERE
         MANUAL_PROFILE_UUID: "eba2ce03-c54a-447a-b1a5-d97006c92fe0"
         # ----------------------------------------------------------------
       node: latest
@@ -27,8 +27,16 @@ workflows:
       - name: Configure Signing & Profiles
         script: |
           keychain initialize
+          
+          # Manually decode and add the P12 certificate from Environment Variables
+          echo $CERTIFICATE_BASE64 | base64 --decode > /tmp/certificate.p12
+          keychain add-certificates --certificate /tmp/certificate.p12 --certificate-password $CERTIFICATE_PASSWORD
+          
+          # Fetch the profile (this handles the .mobileprovision file)
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
-          keychain add-certificates
+          
+          # Confirm the certificate is now visible in the keychain
+          security find-identity -v -p codesigning
       - name: Build iOS App (Manual Override)
         script: |
           PBXPROJ="$XCODE_PROJECT/project.pbxproj"
