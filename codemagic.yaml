@@ -29,15 +29,22 @@ workflows:
           # 3. Fetch signing files
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           
-          # 4. Force Manual Signing Style in pbxproj
-          # This specifically fixes the "Select a provisioning profile" error
+          # 4. EXTREME PBXPROJ PATCHING
+          # Find the downloaded profile UUID
+          PROV_PROFILE_UUID=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
+          echo "Targeting Profile UUID: $PROV_PROFILE_UUID"
+
+          # Force Manual Style
           sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$XCODE_PROJECT/project.pbxproj"
           
-          # 5. Apply Profiles to Project
+          # Force Team ID and Profile UUID into every build configuration block
+          sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$XCODE_PROJECT/project.pbxproj"
+          sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
+          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
+
+          # 5. Apply Profiles via CLI
           xcode-project use-profiles --bundle-id "$BUNDLE_ID"
 
-          # 6. Export Profile for build step
-          PROV_PROFILE_UUID=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
@@ -52,9 +59,12 @@ workflows:
             -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
             -authenticationKeyPath "$AUTH_KEY_PATH" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
             clean archive
     artifacts:
       - build/ios/xcarchive/*.xcarchive
