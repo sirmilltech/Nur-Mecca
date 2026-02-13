@@ -10,8 +10,14 @@
     "android:sync": "npx cap sync android",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "islamic",
+    "mecca",
+    "quran",
+    "halal",
+    "capacitor"
+  ],
+  "author": "Milltech",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
