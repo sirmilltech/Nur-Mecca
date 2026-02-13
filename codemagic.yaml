@@ -35,38 +35,43 @@ workflows:
           echo "Found Profile UUID: $PROV_PROFILE_UUID"
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 4. FORCE REPAIR VIA PYTHON (More reliable than sed for nested blocks)
+          # 4. TARGETED PROJECT REWRITE (Python)
+          # We force the ProvisioningProfile specifier into the build settings AND target attributes
           python3 - <<EOF
           import os
           import re
 
-          def repair_project(file_path, uuid, team_id, bundle_id):
+          def force_manual_signing(file_path, uuid, team_id, bundle_id):
               with open(file_path, 'r') as f:
                   content = f.read()
 
-              # Force Manual Style
+              # Disable Automatic Signing
               content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
               
-              # Replace empty or existing specifiers with the correct UUID
+              # Force identifiers
+              content = re.sub(r'DevelopmentTeam = [A-Z0-9]*;', f'DevelopmentTeam = {team_id};', content)
+              content = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = .*?;', f'PRODUCT_BUNDLE_IDENTIFIER = "{bundle_id}";', content)
+              
+              # Ensure the Profile UUID is mapped to every configuration
               content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = ".*?";', f'PROVISIONING_PROFILE_SPECIFIER = "{uuid}";', content)
               content = re.sub(r'PROVISIONING_PROFILE = ".*?";', f'PROVISIONING_PROFILE = "{uuid}";', content)
               
-              # Ensure Team and Bundle ID match
-              content = re.sub(r'DevelopmentTeam = [A-Z0-9]*;', f'DevelopmentTeam = {team_id};', content)
-              content = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = .*?;', f'PRODUCT_BUNDLE_IDENTIFIER = {bundle_id};', content)
+              # Nuclear option: If PROVISIONING_PROFILE_SPECIFIER is missing in some blocks, inject it
+              if 'PROVISIONING_PROFILE_SPECIFIER' not in content:
+                  content = content.replace('PRODUCT_BUNDLE_IDENTIFIER = "{bundle_id}";', 
+                                          f'PRODUCT_BUNDLE_IDENTIFIER = "{bundle_id}";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{uuid}";')
 
               with open(file_path, 'w') as f:
                   f.write(content)
-              print(f"Repaired {file_path}")
+              print(f"Successfully patched {file_path}")
 
-          for root, dirs, files in os.walk('ios'):
-              for file in files:
-                  if file == 'project.pbxproj':
-                      repair_project(os.path.join(root, file), '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM', '$BUNDLE_ID')
+          target_file = 'ios/App/App.xcodeproj/project.pbxproj'
+          if os.path.exists(target_file):
+              force_manual_signing(target_file, '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM', '$BUNDLE_ID')
           EOF
       - name: Build iOS App
         script: |
-          # Use -exportArchive style flags to ensure the profile is baked in
+          # Use -exportOptionsPlist generation via CLI flags
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -79,9 +84,9 @@ workflows:
             -authenticationKeyPath "$AUTH_KEY_PATH" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             clean archive
     publishing:
       app_store_connect:
