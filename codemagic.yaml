@@ -9,7 +9,6 @@ workflows:
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
-        # REPLACE THIS with the Team ID from your Apple Developer account if different
         DEVELOPMENT_TEAM: "JBMD9M6ZPC" 
     scripts:
       - name: Install dependencies
@@ -18,12 +17,17 @@ workflows:
         script: npx cap sync ios
       - name: Set up code signing
         script: |
+          # 1. Initialize the keychain
           keychain initialize
-          keychain add-certificates
-          # This forces the project to use the profile you uploaded
-          xcode-project use-profiles --set-team-id="$DEVELOPMENT_TEAM"
+          
+          # 2. Add certificates (forcing a search in all potential directories)
+          keychain add-certificates --global-keystore
+          
+          # 3. Use profiles (removed the unrecognized --set-team-id flag)
+          xcode-project use-profiles
       - name: Build iOS App
         script: |
+          # We pass the DEVELOPMENT_TEAM and code signing identity directly here
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -31,6 +35,7 @@ workflows:
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_STYLE=Manual \
             clean archive
     artifacts:
       - build/ios/xcarchive/*.xcarchive
