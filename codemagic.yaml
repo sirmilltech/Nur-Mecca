@@ -30,24 +30,18 @@ workflows:
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           xcode-project use-profiles
 
-          # 4. NUCLEAR PBXPROJ PATCHING
+          # 4. GLOBAL PBXPROJ PATCHING (Including Dependencies)
           # Find the downloaded profile UUID
           PROV_PROFILE_UUID=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
           echo "Targeting Profile UUID: $PROV_PROFILE_UUID"
           
-          PBXPROJ="$XCODE_PROJECT/project.pbxproj"
-          
-          # Force ProvisioningStyle to Manual for all targets
-          sed -i '' 's/ProvisioningStyle = [A-Za-z]*;/ProvisioningStyle = Manual;/g' "$PBXPROJ"
-          
-          # Force the Team ID everywhere
-          sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
-          
-          # Force the Profile UUID into every possible variant of the profile key
-          sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
-          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
-          sed -i '' "s/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
-          sed -i '' "s/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
+          # Find all pbxproj files in the ios directory and force manual signing
+          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/ProvisioningStyle = [A-Za-z]*;/ProvisioningStyle = Manual;/g"
+          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g"
+          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g"
+          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g"
+          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g"
+          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g"
 
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
@@ -66,6 +60,7 @@ workflows:
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             clean archive
     artifacts:
       - build/ios/xcarchive/*.xcarchive
