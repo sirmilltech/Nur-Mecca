@@ -1,7 +1,7 @@
-# PROJECT NUR-MECCA | Manual Final Hardcoded Build
+# PROJECT NUR-MECCA | Managed Signing for Windows Users
 workflows:
   ios-production:
-    name: Nur-Mecca iOS Manual Build
+    name: Nur-Mecca iOS Managed Build
     instance_type: mac_mini_m1
     max_build_duration: 120
     environment:
@@ -12,10 +12,8 @@ workflows:
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
         # ----------------------------------------------------------------
-        # 1. PASTE YOUR 10-CHARACTER TEAM ID HERE
-        MANUAL_TEAM_ID: "ZQ995AD296"
-        # 2. PASTE YOUR PROFILE UUID HERE
-        MANUAL_PROFILE_UUID: "eba2ce03-c54a-447a-b1a5-d97006c92fe0"
+        # Your Team ID is visible in the Membership section of developer.apple.com
+        MANUAL_TEAM_ID: "U2SA5VYGH7"
         # ----------------------------------------------------------------
       node: latest
       xcode: latest
@@ -28,29 +26,19 @@ workflows:
         script: |
           keychain initialize
           
-          # Manually decode and add the P12 certificate from Environment Variables
-          echo $CERTIFICATE_BASE64 | base64 --decode > /tmp/certificate.p12
-          keychain add-certificates --certificate /tmp/certificate.p12 --certificate-password $CERTIFICATE_PASSWORD
-          
-          # Fetch the profile (this handles the .mobileprovision file)
+          # This command is the 'Magic' for Windows users. 
+          # It uses your API Key to create a Certificate and Profile automatically 
+          # if they don't exist, and installs them into the build machine.
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           
-          # Confirm the certificate is now visible in the keychain
-          security find-identity -v -p codesigning
-      - name: Build iOS App (Manual Override)
-        script: |
-          PBXPROJ="$XCODE_PROJECT/project.pbxproj"
+          keychain add-certificates
           
-          echo "🛠️ Forcing Project File to Manual Signing..."
-          # Set Manual Mode
-          sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
-          # Inject Team ID
-          sed -i '' "s/DEVELOPMENT_TEAM = .*/DEVELOPMENT_TEAM = $MANUAL_TEAM_ID;/g" "$PBXPROJ"
-          # Inject Profile UUID
-          sed -i '' "s/PROVISIONING_PROFILE = .*/PROVISIONING_PROFILE = \"$MANUAL_PROFILE_UUID\";/g" "$PBXPROJ"
-          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = .*/PROVISIONING_PROFILE_SPECIFIER = \"$MANUAL_PROFILE_UUID\";/g" "$PBXPROJ"
-
-          # Create the required ExportOptions.plist
+          # This tells the Xcode project to use the profiles we just fetched
+          xcode-project use-profiles
+      - name: Build iOS App (Managed Build)
+        script: |
+          # Create the required ExportOptions.plist automatically
+          # We use 'automatic' style here because Codemagic is managing the profile
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -58,13 +46,8 @@ workflows:
           <dict>
               <key>method</key>
               <string>app-store</string>
-              <key>provisioningProfiles</key>
-              <dict>
-                  <key>$BUNDLE_ID</key>
-                  <string>$MANUAL_PROFILE_UUID</string>
-              </dict>
               <key>signingStyle</key>
-              <string>manual</string>
+              <string>automatic</string>
               <key>teamID</key>
               <string>$MANUAL_TEAM_ID</string>
           </dict>
@@ -79,10 +62,7 @@ workflows:
             -configuration Release \
             -archivePath "build/ios/xcarchive/App.xcarchive" \
             clean archive \
-            CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="$MANUAL_TEAM_ID" \
-            PROVISIONING_PROFILE_SPECIFIER="$MANUAL_PROFILE_UUID" \
-            CODE_SIGN_IDENTITY="Apple Distribution"
+            DEVELOPMENT_TEAM="$MANUAL_TEAM_ID"
 
       - name: Export IPA
         script: |
