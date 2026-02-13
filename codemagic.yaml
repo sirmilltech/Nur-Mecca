@@ -18,34 +18,39 @@ workflows:
         script: npm install
       - name: Capacitor Sync
         script: npx cap sync ios
-      - name: Set up code signing
+      - name: Hard-Reset Project Signing
         script: |
           # 1. API KEY SETUP
           echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
           export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8
 
-          # 2. INITIALIZE KEYCHAIN
+          # 2. INITIALIZE KEYCHAIN & FETCH
           keychain initialize
-          
-          # 3. FETCH AND CREATE SIGNING FILES
-          # This specifically fetches the 'app_store' profile needed for distribution
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
-          
-          # 4. INSTALL CERTIFICATES
           keychain add-certificates
           
-          # 5. PROJECT REPAIR (The Fix for 'No Accounts')
-          # This tool forces the Xcode project to use the profile we just downloaded
-          # instead of looking for a logged-in Apple ID account.
-          xcode-project use-profiles --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE
-          
-          # 6. EXTRACT PROVISIONING PROFILE UUID
+          # 3. EXTRACT PROFILE UUID
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
+          echo "Using Profile UUID: $PROV_PROFILE_UUID"
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
+
+          # 4. NUCLEAR REPAIR (Sed-based injection)
+          # We manually edit the project files to disable automatic signing and force the UUID
+          # This fixes the "requires a provisioning profile" error by stripping out automatic dependencies.
+          echo "Searching for project files to repair..."
+          find ios -name "project.pbxproj" | while read -r pbxproj; do
+            echo "Processing $pbxproj"
+            # Disable Automatic Signing
+            sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$pbxproj"
+            # Force the Team ID
+            sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$pbxproj"
+            # Map the Provisioning Profile directly into the file
+            sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
+            sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
+          done
       - name: Build iOS App
         script: |
-          # We force Manual signing flags here to override Xcode's 'Account' requirement
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
