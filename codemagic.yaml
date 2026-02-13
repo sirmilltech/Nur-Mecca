@@ -3,7 +3,8 @@ workflows:
     name: Nur-Mecca iOS Automatic Build
     max_build_duration: 60
     integrations:
-      app_store_connect: "NurMecca_API_Key"
+      # Updated to match the name "Codemagic_Key" seen in your screenshot
+      app_store_connect: "Codemagic_Key"
     environment:
       groups:
         - apple_auth 
@@ -54,7 +55,6 @@ workflows:
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
-          # We force the SPM target to NOT require its own signing, inheriting from the App
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
