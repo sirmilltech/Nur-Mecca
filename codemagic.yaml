@@ -20,14 +20,14 @@ workflows:
           # 1. Initialize the keychain
           keychain initialize
           
-          # 2. Add certificates (forcing a search in all potential directories)
+          # 2. Search everywhere for the uploaded .p12 file
           keychain add-certificates --global-keystore
           
-          # 3. Use profiles (removed the unrecognized --set-team-id flag)
+          # 3. Use profiles without the unrecognized team-id flag
           xcode-project use-profiles
       - name: Build iOS App
         script: |
-          # We pass the DEVELOPMENT_TEAM and code signing identity directly here
+          # Injecting the Team ID and Manual style directly into the xcodebuild command
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
