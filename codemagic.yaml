@@ -27,19 +27,24 @@ workflows:
           echo "export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8" >> $CM_ENV
 
           # 3. Keychain setup and Certificate installation
-          # This is critical to fix the "No signing certificate found" error
+          # Initialize the keychain to store the private key (.p12)
           keychain initialize
+          
+          # Fetch profiles from Apple
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          
+          # Explicitly add certificates to the keychain so xcodebuild can find the private key
           keychain add-certificates
           
-          # 4. EXTREME PBXPROJ PATCHING (Main Project)
+          # 4. EXTREME PBXPROJ PATCHING
           PROV_PROFILE_UUID=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
           echo "Targeting Profile UUID: $PROV_PROFILE_UUID"
 
-          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$XCODE_PROJECT/project.pbxproj"
-          sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$XCODE_PROJECT/project.pbxproj"
-          sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
-          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
+          # Patch the main project AND the SPM project to force Manual signing
+          find ios/App -name "project.pbxproj" -exec sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' {} +
+          find ios/App -name "project.pbxproj" -exec sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" {} +
+          find ios/App -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" {} +
+          find ios/App -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" {} +
 
           # 5. Apply Profiles via CLI
           xcode-project use-profiles --bundle-id "$BUNDLE_ID"
@@ -47,7 +52,6 @@ workflows:
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
-          # Adding CODE_SIGN_ALLOW_CONSTANT_SIGNING_ERRORS=YES to bypass minor SPM signing issues
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -65,7 +69,6 @@ workflows:
             CODE_SIGN_IDENTITY="Apple Distribution" \
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGNING_ALLOWED=YES \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
             clean archive
     artifacts:
       - build/ios/xcarchive/*.xcarchive
