@@ -19,7 +19,6 @@ workflows:
       - name: Prepare Signing
         script: |
           # 1. Create the .p8 key file from the environment variable
-          # This creates the "absolute path" that xcodebuild is asking for
           echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
           echo "export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8" >> $CM_ENV
 
@@ -27,12 +26,16 @@ workflows:
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           xcode-project use-profiles
 
-          # 3. Inject Team ID and force Manual style
+          # 3. Extract the Profile UUID to force-inject it
+          PROV_PROFILE_UUID=$(grep -m 1 "PROVISIONING_PROFILE =" "$XCODE_PROJECT/project.pbxproj" | cut -d'=' -f2 | tr -d ' ;"')
+          echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
+
+          # 4. Inject Team ID and force Manual style
           sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$XCODE_PROJECT/project.pbxproj"
           sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$XCODE_PROJECT/project.pbxproj"
       - name: Build iOS App
         script: |
-          # Use the newly created AUTH_KEY_PATH which is an absolute path
+          # Use explicit profile specifiers to satisfy the "Select a provisioning profile" error
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -44,6 +47,7 @@ workflows:
             -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
             -authenticationKeyPath "$AUTH_KEY_PATH" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             CODE_SIGN_STYLE=Manual \
             clean archive
     artifacts:
