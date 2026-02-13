@@ -35,44 +35,41 @@ workflows:
           echo "Found Profile UUID: $PROV_PROFILE_UUID"
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 4. SURGICAL PROJECT REPAIR
+          # 4. SURGICAL PROJECT INJECTION
+          # This specifically updates the project file without breaking the JSON-like structure
           python3 - <<EOF
           import os
           import re
 
-          def surgical_patch(file_path, uuid, team_id):
-              if not os.path.exists(file_path):
-                  return
-              
-              with open(file_path, 'r') as f:
+          def fix_project_file(path, uuid, team_id):
+              with open(path, 'r') as f:
                   lines = f.readlines()
-
+              
               new_lines = []
               for line in lines:
                   # Force Manual Style
                   line = line.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
                   
-                  # Inject Team ID
+                  # Inject Team ID and Profile IDs into every build configuration block
                   if 'DevelopmentTeam =' in line:
-                      line = re.sub(r'DevelopmentTeam = [A-Z0-9]*;', f'DevelopmentTeam = {team_id};', line)
-                  
-                  # Inject Profile UUID
+                      line = f'\t\t\t\tDevelopmentTeam = {team_id};\n'
                   if 'PROVISIONING_PROFILE_SPECIFIER =' in line:
                       line = f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{uuid}";\n'
                   if 'PROVISIONING_PROFILE =' in line:
                       line = f'\t\t\t\tPROVISIONING_PROFILE = "{uuid}";\n'
-                      
+                  
                   new_lines.append(line)
-
-              with open(file_path, 'w') as f:
+              
+              with open(path, 'w') as f:
                   f.writelines(new_lines)
-              print(f"Surgically patched {file_path}")
 
-          surgical_patch('ios/App/App.xcodeproj/project.pbxproj', '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM')
+          project_path = 'ios/App/App.xcodeproj/project.pbxproj'
+          if os.path.exists(project_path):
+              fix_project_file(project_path, '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM')
           EOF
       - name: Build iOS App
         script: |
-          # Explicitly pass the UUID to the build command
+          # We pass the UUID again here as a safety fallback
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
