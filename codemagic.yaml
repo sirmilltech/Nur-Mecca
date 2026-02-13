@@ -35,42 +35,40 @@ workflows:
           echo "Using Profile UUID: $PROV_PROFILE_UUID"
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 4. Surgical metadata fix for Xcode 16+
+          # 4. Reinforced metadata fix for Xcode 16+
           python3 - <<EOF
           import os
           import re
 
           path = 'ios/App/App.xcodeproj/project.pbxproj'
+          uuid = os.environ.get("PROV_PROFILE_UUID")
+          team = os.environ.get("DEVELOPMENT_TEAM")
+
           if os.path.exists(path):
               with open(path, 'r') as f:
-                  lines = f.readlines()
+                  content = f.read()
               
-              fixed_lines = []
-              for line in lines:
-                  # Force Manual Style
-                  line = line.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
-                  
-                  # Inject variables into build settings blocks
-                  if 'DEVELOPMENT_TEAM =' in line:
-                      line = f'\t\t\t\tDEVELOPMENT_TEAM = {os.environ.get("DEVELOPMENT_TEAM")};\n'
-                  if 'PROVISIONING_PROFILE_SPECIFIER =' in line:
-                      line = f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{os.environ.get("PROV_PROFILE_UUID")}";\n'
-                  if 'PROVISIONING_PROFILE =' in line:
-                      line = f'\t\t\t\tPROVISIONING_PROFILE = "{os.environ.get("PROV_PROFILE_UUID")}";\n'
-                  if 'CODE_SIGN_STYLE =' in line:
-                      line = '\t\t\t\tCODE_SIGN_STYLE = Manual;\n'
-                  if 'CODE_SIGN_IDENTITY =' in line:
-                      line = '\t\t\t\tCODE_SIGN_IDENTITY = "Apple Distribution";\n'
-                  
-                  fixed_lines.append(line)
+              # Force Manual Provisioning Style everywhere
+              content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
               
+              # Targeted Regex replacement for build settings to ensure they are set correctly
+              content = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = {team};', content)
+              content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', f'PROVISIONING_PROFILE_SPECIFIER = "{uuid}";', content)
+              content = re.sub(r'PROVISIONING_PROFILE = [^;]+;', f'PROVISIONING_PROFILE = "{uuid}";', content)
+              content = re.sub(r'CODE_SIGN_STYLE = [^;]+;', 'CODE_SIGN_STYLE = Manual;', content)
+              content = re.sub(r'CODE_SIGN_IDENTITY = [^;]+;', 'CODE_SIGN_IDENTITY = "Apple Distribution";', content)
+
+              # Special fix for TargetAttributes block which often causes the 'Select a profile' error
+              # This ensures the attribute 'provisioningCertificateSpecifier' matches our profile
+              content = re.sub(r'provisioningCertificateSpecifier = [^;]+;', f'provisioningCertificateSpecifier = "Apple Distribution";', content)
+
               with open(path, 'w') as f:
-                  f.writelines(fixed_lines)
-              print("Xcode project file surgically updated.")
+                  f.write(content)
+              print("Xcode project file reinforced and updated.")
           EOF
       - name: Build iOS App
         script: |
-          # Use the explicit UUID to bypass Xcode's internal profile search logic
+          # Passing explicit settings to xcodebuild as the final override
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -84,6 +82,7 @@ workflows:
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            -allowProvisioningUpdates \
             clean archive
     publishing:
       app_store_connect:
