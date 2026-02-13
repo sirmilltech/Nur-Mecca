@@ -18,39 +18,57 @@ workflows:
         script: npm install
       - name: Capacitor Sync
         script: npx cap sync ios
-      - name: Prepare Signing
+      - name: Self-Healing Signing & Project Repair
         script: |
-          # 1. API Key Setup
+          # 1. API KEY & ENVIRONMENT SETUP
+          echo "Setting up App Store Connect API Key..."
           echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
           echo "export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8" >> $CM_ENV
 
-          # 2. Initialize Keychain & Add Certificates
+          # 2. KEYCHAIN & CERTIFICATE INITIALIZATION
+          # Fixes: "No signing certificate found"
           keychain initialize
           keychain add-certificates
           
-          # 3. Clear old profiles to prevent conflicts
+          # 3. CLEANUP & FRESH PROFILE FETCH
+          # Fixes: Profile conflicts or stale cached profiles
           rm -rf ~/Library/MobileDevice/Provisioning\ Profiles/*
-
-          # 4. Fetch Profiles (Specifically App Store type)
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           
-          # 5. Extract Profile UUID
+          # 4. DYNAMIC UUID EXTRACTION
           PROV_PROFILE_PATH=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | head -n 1)
+          if [ -z "$PROV_PROFILE_PATH" ]; then
+            echo "ERROR: No provisioning profile was downloaded."
+            exit 1
+          fi
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
-          echo "Using Profile UUID: $PROV_PROFILE_UUID"
+          echo "Extracted Profile UUID: $PROV_PROFILE_UUID"
 
-          # 6. FORCE PROJECT MAPPING
-          # This tool tells Xcode exactly which profile to use for your bundle ID
+          # 5. GLOBAL PROJECT REPAIR LOOP (The "Nuclear" Fix)
+          # This loop visits every project file (Main App + SPM Targets) to force alignment
+          # Fixes: "App requires a provisioning profile" and "CapApp-SPM signing error"
+          echo "Starting project-wide signing injection..."
+          find ios -name "project.pbxproj" | while read -r pbxproj; do
+            echo "Repairing: $pbxproj"
+            # Force Manual Signing
+            sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$pbxproj"
+            # Inject Team ID
+            sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$pbxproj"
+            # Inject Profile UUID into all configurations
+            sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
+            sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
+            # Fix for SPM Wrapper targets that often stay stuck on "None"
+            sed -i '' "s/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
+          done
+
+          # 6. FORCE RE-MAPPING VIA CLI
           xcode-project use-profiles --bundle-id "$BUNDLE_ID"
-
-          # 7. Final pbxproj Patching
-          find ios -name "project.pbxproj" -exec sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' {} +
-          find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" {} +
-          find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" {} +
 
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
+          # We use a combined flag set to ensure that even if the project settings
+          # are stubborn, the xcodebuild command overrides them at runtime.
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -61,11 +79,11 @@ workflows:
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
             -authenticationKeyPath "$AUTH_KEY_PATH" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             OTHER_CODE_SIGN_FLAGS="--keychain $CM_KEYCHAIN_PATH" \
             clean archive
     publishing:
