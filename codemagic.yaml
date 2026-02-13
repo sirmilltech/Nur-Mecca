@@ -36,16 +36,18 @@ workflows:
           echo "Targeting Profile UUID: $PROV_PROFILE_UUID"
           
           # Find all pbxproj files in the ios directory and force manual signing
-          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/ProvisioningStyle = [A-Za-z]*;/ProvisioningStyle = Manual;/g"
-          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g"
-          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g"
-          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g"
-          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g"
-          find ios -name "project.pbxproj" | xcase xargs sed -i '' "s/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g"
+          # Fixed: Removed 'xcase' typo and ensured correct sed syntax for macOS
+          find ios -name "project.pbxproj" -exec sed -i '' "s/ProvisioningStyle = [A-Za-z]*;/ProvisioningStyle = Manual;/g" {} +
+          find ios -name "project.pbxproj" -exec sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" {} +
+          find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" {} +
+          find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" {} +
+          find ios -name "project.pbxproj" -exec sed -i '' "s/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g" {} +
+          find ios -name "project.pbxproj" -exec sed -i '' "s/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE_SPECIFIER\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g" {} +
 
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
+          # Ensure the profile UUID is available in this shell session
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
