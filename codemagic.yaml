@@ -29,30 +29,32 @@ workflows:
           # 3. Keychain setup and Certificate installation
           keychain initialize
           
-          # Fetch profiles from Apple
+          # Force fetching and installing the profile
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           
-          # Force certificate installation into the system keychain
+          # Install certificates from env into the newly initialized keychain
           keychain add-certificates
           
           # 4. EXTREME PBXPROJ PATCHING
+          # Get the UUID of the profile we just downloaded
           PROV_PROFILE_UUID=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
           echo "Targeting Profile UUID: $PROV_PROFILE_UUID"
 
-          # Patch every pbxproj found in the ios directory to ensure dependencies like SPM match
+          # Deep patch for both the main project and the SPM wrapper
           find ios -name "project.pbxproj" -exec sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' {} +
           find ios -name "project.pbxproj" -exec sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" {} +
           find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" {} +
           find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" {} +
 
-          # 5. Apply Profiles via CLI
+          # 5. Apply Profiles via CLI to ensure xcode-project knows about them
           xcode-project use-profiles --bundle-id "$BUNDLE_ID"
 
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
-          # CODE_SIGNING_ALLOWED=NO is passed to prevent sub-targets from requiring their own identity
-          # AD_HOC_CODE_SIGNING_ALLOWED=YES allows local signing for dependencies
+          # Use explicit signing flags in the xcodebuild command
+          # Added IPHONEOS_DEPLOYMENT_TARGET to ensure compatibility
+          # Added SUPPORTS_MACCATALYST=NO to prune build graph
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -71,8 +73,8 @@ workflows:
             CODE_SIGNING_REQUIRED=YES \
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGN_ALLOW_CONSTANT_SIGNING_ERRORS=YES \
-            COMPILER_INDEX_STORE_ENABLE=NO \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             clean archive
     artifacts:
       - build/ios/xcarchive/*.xcarchive
