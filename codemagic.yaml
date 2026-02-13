@@ -26,20 +26,27 @@ workflows:
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           xcode-project use-profiles
 
-          # 3. BRUTE FORCE INJECTION: Find the downloaded profile and force it into the project file
-          # This specifically targets the "requires a provisioning profile" error
-          PROV_PROFILE_UUID=$(ls ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
-          echo "Detected Profile UUID: $PROV_PROFILE_UUID"
+          # 3. ADVANCED BRUTE FORCE: Force-patch the internal project file
+          # We look for the most recently downloaded profile from Codemagic
+          PROV_PROFILE_UUID=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
+          echo "Force-Injecting Profile UUID: $PROV_PROFILE_UUID"
           
-          # Force the UUID into the pbxproj file for all configurations
-          sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
-          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
-          sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$XCODE_PROJECT/project.pbxproj"
-          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$XCODE_PROJECT/project.pbxproj"
+          # Use 'sed' to overwrite all existing profile settings in the pbxproj
+          # This forces Xcode to accept our generated profile
+          PBXPROJ="$XCODE_PROJECT/project.pbxproj"
+          sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
+          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
+          sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
+          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$PBXPROJ"
+          
+          # Additional check: inject the UUID where it might be missing entirely
+          # This ensures the 'Release' configuration is explicitly linked
+          sed -i '' "s/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \".*\";/\"PROVISIONING_PROFILE\[sdk=iphoneos\*\]\" = \"$PROV_PROFILE_UUID\";/g" "$PBXPROJ"
 
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
+          # Passing the variables again to ensure runtime override
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
