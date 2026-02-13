@@ -27,14 +27,16 @@ workflows:
           echo "export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8" >> $CM_ENV
 
           # 3. Fetch signing files
-          # This downloads the profile and the certificate to the builder machine
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           
-          # 4. Apply Profiles to Project
-          # Instead of manual sed, we use the official tool to set the project to manual signing
+          # 4. Force Manual Signing Style in pbxproj
+          # This specifically fixes the "Select a provisioning profile" error
+          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$XCODE_PROJECT/project.pbxproj"
+          
+          # 5. Apply Profiles to Project
           xcode-project use-profiles --bundle-id "$BUNDLE_ID"
 
-          # 5. Export Profile for build step
+          # 6. Export Profile for build step
           PROV_PROFILE_UUID=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
