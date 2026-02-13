@@ -18,7 +18,7 @@ workflows:
         script: npx cap sync ios
       - name: Prepare Signing
         script: |
-          # 1. Create the .p8 key file from the environment variable
+          # 1. Create the .p8 key file
           echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
           echo "export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8" >> $CM_ENV
 
@@ -26,16 +26,20 @@ workflows:
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           xcode-project use-profiles
 
-          # 3. Extract the Profile UUID to force-inject it
-          PROV_PROFILE_UUID=$(grep -m 1 "PROVISIONING_PROFILE =" "$XCODE_PROJECT/project.pbxproj" | cut -d'=' -f2 | tr -d ' ;"')
-          echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
-
-          # 4. Inject Team ID and force Manual style
+          # 3. BRUTE FORCE INJECTION: Find the downloaded profile and force it into the project file
+          # This specifically targets the "requires a provisioning profile" error
+          PROV_PROFILE_UUID=$(ls ~/Library/MobileDevice/Provisioning\ Profiles | head -n 1 | cut -d. -f1)
+          echo "Detected Profile UUID: $PROV_PROFILE_UUID"
+          
+          # Force the UUID into the pbxproj file for all configurations
+          sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
+          sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$XCODE_PROJECT/project.pbxproj"
           sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$XCODE_PROJECT/project.pbxproj"
           sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$XCODE_PROJECT/project.pbxproj"
+
+          echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
-          # Use explicit profile specifiers to satisfy the "Select a provisioning profile" error
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -47,6 +51,7 @@ workflows:
             -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
             -authenticationKeyPath "$AUTH_KEY_PATH" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             CODE_SIGN_STYLE=Manual \
             clean archive
