@@ -10,7 +10,6 @@ workflows:
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
         DEVELOPMENT_TEAM: "JBMD9M6ZPC"
-        # Adding your Key ID from the screenshot to ensure the connection is explicit
         APP_STORE_CONNECT_KEY_IDENTIFIER: "U2SA5VYGH7"
     scripts:
       - name: Install dependencies
@@ -19,18 +18,21 @@ workflows:
         script: npx cap sync ios
       - name: Prepare Signing
         script: |
-          # 1. Fetch signing files specifically for Distribution/App Store
-          # Since you uploaded a .p12 distribution certificate, we must target 'app-store' type
+          # 1. Create the .p8 key file from the environment variable
+          # This creates the "absolute path" that xcodebuild is asking for
+          echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
+          echo "export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8" >> $CM_ENV
+
+          # 2. Fetch signing files
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           xcode-project use-profiles
 
-          # 2. Inject Team ID and force Manual style to stop Xcode from looking for "Accounts"
-          # This bypasses the "No Accounts: Add a new account" error
+          # 3. Inject Team ID and force Manual style
           sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$XCODE_PROJECT/project.pbxproj"
           sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$XCODE_PROJECT/project.pbxproj"
       - name: Build iOS App
         script: |
-          # We use 'archive' with the explicit key details from your screenshot
+          # Use the newly created AUTH_KEY_PATH which is an absolute path
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -40,7 +42,7 @@ workflows:
             -allowProvisioningUpdates \
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
-            -authenticationKeyPath "$APP_STORE_CONNECT_PRIVATE_KEY" \
+            -authenticationKeyPath "$AUTH_KEY_PATH" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             CODE_SIGN_STYLE=Manual \
             clean archive
