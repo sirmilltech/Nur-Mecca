@@ -2,6 +2,8 @@ workflows:
   ios-workflow:
     name: Nur-Mecca iOS Automatic Build
     max_build_duration: 60
+    integrations:
+      app_store_connect: "NurMecca_API_Key"
     environment:
       groups:
         - apple_auth 
