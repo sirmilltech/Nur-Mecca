@@ -23,15 +23,17 @@ workflows:
           # 2. Add certificates from the Codemagic Global Keystore
           keychain add-certificates --global-keystore
           
-          # 3. Import profiles and extract the UUID for the build
+          # 3. Import profiles
           xcode-project use-profiles
           
-          # 4. Find the UUID of the profile we just imported to use in the build command
+          # 4. Force find the UUID and ensure it's exported to the environment
           PROVISIONING_PROFILE_UUID=$(mobile-static find-profile-uuid --bundle-id "$BUNDLE_ID")
+          echo "Found Profile UUID: $PROVISIONING_PROFILE_UUID"
           echo "export PROVISIONING_PROFILE_UUID=$PROVISIONING_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
-          # Passing the UUID explicitly to fix the "Requires a provisioning profile" error
+          # We are now using both SPECIFIER and the direct PROVISIONING_PROFILE flag
+          # We also force the Identity to "Apple Distribution"
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -40,6 +42,8 @@ workflows:
             -archivePath build/ios/xcarchive/App.xcarchive \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_UUID" \
+            PROVISIONING_PROFILE="$PROVISIONING_PROFILE_UUID" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             CODE_SIGN_STYLE=Manual \
             clean archive
     artifacts:
