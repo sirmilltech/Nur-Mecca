@@ -9,6 +9,7 @@ workflows:
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
+        DEVELOPMENT_TEAM: "JBMD9M6ZPC" 
     scripts:
       - name: Install dependencies
         script: npm install
@@ -16,14 +17,19 @@ workflows:
         script: npx cap sync ios
       - name: Prepare Signing
         script: |
-          # This script tells Codemagic to talk to Apple and 
-          # generate the profiles automatically so you don't have to.
+          # 1. Fetch signing files from Apple
           app-store-connect fetch-signing-files "$BUNDLE_ID" --create
           xcode-project use-profiles
+
+          # 2. FORCE INJECT Development Team into the project file
+          # This fixes the "requires a development team" error
+          sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$XCODE_PROJECT/project.pbxproj"
+          
+          # Ensure Manual style is set so it respects our Team ID
+          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$XCODE_PROJECT/project.pbxproj"
       - name: Build iOS App
         script: |
-          # The -allowProvisioningUpdates flag is the key here. 
-          # It forces Xcode to ignore the project's internal errors.
+          # Added DEVELOPMENT_TEAM flag to the build command
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -34,6 +40,7 @@ workflows:
             -authenticationKeyID "$AppStoreConnectKeyID" \
             -authenticationKeyIssuerID "$AppStoreConnectIssuerID" \
             -authenticationKeyPath "$AppStoreConnectKeyPath" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             clean archive
     artifacts:
       - build/ios/xcarchive/*.xcarchive
