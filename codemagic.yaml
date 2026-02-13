@@ -28,22 +28,26 @@ workflows:
           keychain initialize
           keychain add-certificates
           
-          # 3. Fetch Profiles (Forces Codemagic to download the latest profile from Apple)
+          # 3. Clear old profiles to prevent conflicts
+          rm -rf ~/Library/MobileDevice/Provisioning\ Profiles/*
+
+          # 4. Fetch Profiles (Specifically App Store type)
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           
-          # 4. FIND THE PROFILE UUID (The most critical part)
+          # 5. Extract Profile UUID
           PROV_PROFILE_PATH=$(ls -t ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
-          echo "Found Profile UUID: $PROV_PROFILE_UUID"
+          echo "Using Profile UUID: $PROV_PROFILE_UUID"
 
-          # 5. INJECT PROFILE INTO XCODE (The Nuclear Option)
-          # This replaces "Automatic" with "Manual" and forces the UUID into the project file
+          # 6. FORCE PROJECT MAPPING
+          # This tool tells Xcode exactly which profile to use for your bundle ID
+          xcode-project use-profiles --bundle-id "$BUNDLE_ID"
+
+          # 7. Final pbxproj Patching
           find ios -name "project.pbxproj" -exec sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' {} +
           find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" {} +
           find ios -name "project.pbxproj" -exec sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" {} +
-          find ios -name "project.pbxproj" -exec sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" {} +
 
-          # 6. Export for Build Step
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
       - name: Build iOS App
         script: |
@@ -62,6 +66,7 @@ workflows:
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $CM_KEYCHAIN_PATH" \
             clean archive
     publishing:
       app_store_connect:
