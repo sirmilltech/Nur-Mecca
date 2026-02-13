@@ -20,63 +20,63 @@ workflows:
         script: npx cap sync ios
       - name: Hard-Reset Project Signing
         script: |
-          # 1. API KEY SETUP
+          # 1. Setup API Key
           echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
           export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8
 
-          # 2. INITIALIZE KEYCHAIN & FETCH
+          # 2. Fetch and Install Profiles
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # 3. EXTRACT PROFILE UUID
+          # 3. Get the Profile UUID accurately
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
-          PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}")
-          echo "Found Profile UUID: $PROV_PROFILE_UUID"
+          PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
+          echo "Using Profile UUID: $PROV_PROFILE_UUID"
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 4. SURGICAL PROJECT INJECTION
-          # This specifically updates the project file without breaking the JSON-like structure
+          # 4. Surgical metadata fix for Xcode 16+
           python3 - <<EOF
           import os
           import re
 
-          def fix_project_file(path, uuid, team_id):
+          path = 'ios/App/App.xcodeproj/project.pbxproj'
+          if os.path.exists(path):
               with open(path, 'r') as f:
                   lines = f.readlines()
               
-              new_lines = []
+              fixed_lines = []
               for line in lines:
                   # Force Manual Style
                   line = line.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
                   
-                  # Inject Team ID and Profile IDs into every build configuration block
-                  if 'DevelopmentTeam =' in line:
-                      line = f'\t\t\t\tDevelopmentTeam = {team_id};\n'
+                  # Inject variables into build settings blocks
+                  if 'DEVELOPMENT_TEAM =' in line:
+                      line = f'\t\t\t\tDEVELOPMENT_TEAM = {os.environ.get("DEVELOPMENT_TEAM")};\n'
                   if 'PROVISIONING_PROFILE_SPECIFIER =' in line:
-                      line = f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{uuid}";\n'
+                      line = f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{os.environ.get("PROV_PROFILE_UUID")}";\n'
                   if 'PROVISIONING_PROFILE =' in line:
-                      line = f'\t\t\t\tPROVISIONING_PROFILE = "{uuid}";\n'
+                      line = f'\t\t\t\tPROVISIONING_PROFILE = "{os.environ.get("PROV_PROFILE_UUID")}";\n'
+                  if 'CODE_SIGN_STYLE =' in line:
+                      line = '\t\t\t\tCODE_SIGN_STYLE = Manual;\n'
+                  if 'CODE_SIGN_IDENTITY =' in line:
+                      line = '\t\t\t\tCODE_SIGN_IDENTITY = "Apple Distribution";\n'
                   
-                  new_lines.append(line)
+                  fixed_lines.append(line)
               
               with open(path, 'w') as f:
-                  f.writelines(new_lines)
-
-          project_path = 'ios/App/App.xcodeproj/project.pbxproj'
-          if os.path.exists(project_path):
-              fix_project_file(project_path, '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM')
+                  f.writelines(fixed_lines)
+              print("Xcode project file surgically updated.")
           EOF
       - name: Build iOS App
         script: |
-          # We pass the UUID again here as a safety fallback
+          # Use the explicit UUID to bypass Xcode's internal profile search logic
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
             -sdk iphoneos \
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
-            -allowProvisioningUpdates \
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
             -authenticationKeyPath "$AUTH_KEY_PATH" \
