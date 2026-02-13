@@ -36,8 +36,8 @@ workflows:
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
           # 4. NUCLEAR REPAIR (Sed-based injection)
-          # We manually edit the project files to disable automatic signing and force the UUID
-          # This fixes the "requires a provisioning profile" error by stripping out automatic dependencies.
+          # We manually edit the project files to disable automatic signing and force the UUID.
+          # We also ensure the PRODUCT_BUNDLE_IDENTIFIER is strictly set to match the profile.
           echo "Searching for project files to repair..."
           find ios -name "project.pbxproj" | while read -r pbxproj; do
             echo "Processing $pbxproj"
@@ -45,12 +45,15 @@ workflows:
             sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' "$pbxproj"
             # Force the Team ID
             sed -i '' "s/DevelopmentTeam = [A-Z0-9]*;/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" "$pbxproj"
-            # Map the Provisioning Profile directly into the file
-            sed -i '' "s/PROVISIONING_PROFILE = \".*\";/PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
-            sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = \".*\";/PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\";/g" "$pbxproj"
+            # Force the Bundle Identifier to ensure a match
+            sed -i '' "s/PRODUCT_BUNDLE_IDENTIFIER = .*; /PRODUCT_BUNDLE_IDENTIFIER = $BUNDLE_ID; /g" "$pbxproj"
+            # Map the Provisioning Profile directly into the file for ALL configurations
+            sed -i '' "s/PROVISIONING_PROFILE = .*; /PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\"; /g" "$pbxproj"
+            sed -i '' "s/PROVISIONING_PROFILE_SPECIFIER = .*; /PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_UUID\"; /g" "$pbxproj"
           done
       - name: Build iOS App
         script: |
+          # We use the explicit PROVISIONING_PROFILE variable as a fallback for secondary targets
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -66,6 +69,7 @@ workflows:
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             clean archive
     publishing:
       app_store_connect:
