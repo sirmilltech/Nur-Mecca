@@ -1,9 +1,25 @@
-# PROJECT NUR-MECCA | Managed Signing for Windows Users
+Windows User's Guide: Automatic Build Setup
+
+We are switching to Automatic Signing to let Codemagic resolve the profile mismatch itself.
+
+1. Verify Apple API Permissions (Crucial)
+
+Go to App Store Connect -> Users and Access -> Integrations.
+
+Find your Key.
+
+Ensure "Access to Certificates, Identifiers and Profiles" is checked.
+
+Ensure the Role is Admin or App Manager.
+
+2. The Automatic codemagic.yaml
+
+Copy this exactly into your codemagic.yaml file on your Windows machine:
+
 workflows:
-  ios-production:
-    name: Nur-Mecca iOS Managed Build
-    instance_type: mac_mini_m1
-    max_build_duration: 120
+  ios-workflow:
+    name: Nur-Mecca iOS Automatic Build
+    max_build_duration: 60
     environment:
       groups:
         - apple_auth 
@@ -11,65 +27,24 @@ workflows:
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
-        # ----------------------------------------------------------------
-        # Your Team ID is visible in the Membership section of developer.apple.com
-        MANUAL_TEAM_ID: "U2SA5VYGH7"
-        # ----------------------------------------------------------------
-      node: latest
-      xcode: latest
     scripts:
       - name: Install dependencies
         script: npm install
-      - name: Sync Capacitor
+      - name: Capacitor Sync
         script: npx cap sync ios
-      - name: Configure Signing & Profiles
+      - name: Set up code signing
         script: |
-          keychain initialize
-          
-          # This command is the 'Magic' for Windows users. 
-          # It uses your API Key to create a Certificate and Profile automatically 
-          # if they don't exist, and installs them into the build machine.
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
-          
-          keychain add-certificates
-          
-          # This tells the Xcode project to use the profiles we just fetched
-          xcode-project use-profiles
-      - name: Build iOS App (Managed Build)
+          # This command automatically fetches/creates profiles
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --project "$XCODE_PROJECT" --create
+      - name: Build iOS App
         script: |
-          # Create the required ExportOptions.plist automatically
-          # We use 'automatic' style here because Codemagic is managing the profile
-          cat <<EOF > ExportOptions.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store</string>
-              <key>signingStyle</key>
-              <string>automatic</string>
-              <key>teamID</key>
-              <string>$MANUAL_TEAM_ID</string>
-          </dict>
-          </plist>
-          EOF
-
-          echo "🚀 Starting Archive..."
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
             -sdk iphoneos \
             -configuration Release \
-            -archivePath "build/ios/xcarchive/App.xcarchive" \
-            clean archive \
-            DEVELOPMENT_TEAM="$MANUAL_TEAM_ID"
-
-      - name: Export IPA
-        script: |
-          xcodebuild \
-            -exportArchive \
-            -archivePath "build/ios/xcarchive/App.xcarchive" \
-            -exportPath "build/ios/ipa" \
-            -exportOptionsPlist ExportOptions.plist
+            -archivePath build/ios/xcarchive/App.xcarchive \
+            -allowProvisioningUpdates \
+            clean archive
     artifacts:
-      - build/ios/ipa/*.ipa
+      - build/ios/xcarchive/*.xcarchive
