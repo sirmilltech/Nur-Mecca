@@ -35,43 +35,44 @@ workflows:
           echo "Found Profile UUID: $PROV_PROFILE_UUID"
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 4. NUCLEAR TARGET ATTRIBUTE REWRITE
-          # This script targets the TargetAttributes block where Xcode stores the GUI checkbox state
+          # 4. SURGICAL PROJECT REPAIR
           python3 - <<EOF
           import os
           import re
 
-          def nuclear_patch(file_path, uuid, team_id):
-              with open(file_path, 'r') as f:
-                  content = f.read()
-
-              # Force Manual Style in every build configuration
-              content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
+          def surgical_patch(file_path, uuid, team_id):
+              if not os.path.exists(file_path):
+                  return
               
-              # Replace any existing profile refs with the one we just downloaded
-              content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = ".*?";', f'PROVISIONING_PROFILE_SPECIFIER = "{uuid}";', content)
-              content = re.sub(r'PROVISIONING_PROFILE = ".*?";', f'PROVISIONING_PROFILE = "{uuid}";', content)
-              content = re.sub(r'DevelopmentTeam = [A-Z0-9]*;', f'DevelopmentTeam = {team_id};', content)
+              with open(file_path, 'r') as f:
+                  lines = f.readlines()
 
-              # Patch the TargetAttributes section which often overrides the build settings
-              # This finds the attributes for each target and injects the manual style
-              if 'TargetAttributes = {' in content:
-                  # This regex looks for target blocks inside TargetAttributes and ensures they are set to Manual
-                  pattern = r'([A-Z0-9]{24} = \{)([^}]*)'
-                  replacement = r'\1\2\n\t\t\t\t\t\t\t\tProvisioningStyle = Manual;\n\t\t\t\t\t\t\t\tDevelopmentTeam = {team_id};'
-                  content = re.sub(pattern, replacement, content)
+              new_lines = []
+              for line in lines:
+                  # Force Manual Style
+                  line = line.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
+                  
+                  # Inject Team ID
+                  if 'DevelopmentTeam =' in line:
+                      line = re.sub(r'DevelopmentTeam = [A-Z0-9]*;', f'DevelopmentTeam = {team_id};', line)
+                  
+                  # Inject Profile UUID
+                  if 'PROVISIONING_PROFILE_SPECIFIER =' in line:
+                      line = f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = "{uuid}";\n'
+                  if 'PROVISIONING_PROFILE =' in line:
+                      line = f'\t\t\t\tPROVISIONING_PROFILE = "{uuid}";\n'
+                      
+                  new_lines.append(line)
 
               with open(file_path, 'w') as f:
-                  f.write(content)
-              print(f"Patched {file_path}")
+                  f.writelines(new_lines)
+              print(f"Surgically patched {file_path}")
 
-          target = 'ios/App/App.xcodeproj/project.pbxproj'
-          if os.path.exists(target):
-              nuclear_patch(target, '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM')
+          surgical_patch('ios/App/App.xcodeproj/project.pbxproj', '$PROV_PROFILE_UUID', '$DEVELOPMENT_TEAM')
           EOF
       - name: Build iOS App
         script: |
-          # Use explicit signing flags in xcodebuild to override any remaining cached profiles
+          # Explicitly pass the UUID to the build command
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
