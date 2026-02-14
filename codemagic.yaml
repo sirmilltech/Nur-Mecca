@@ -66,7 +66,7 @@ workflows:
           </plist>
           EOF
 
-          # 5. DEEP TARGET INJECTION (Target Attributes & Build Settings)
+          # 5. ATOMIC PROJECT OVERWRITE (TargetAttributes & BuildSettings)
           python3 -c "
           import sys, re, os
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
@@ -77,33 +77,31 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
 
-                      # Fix TargetAttributes: Force ProvisioningProfile and Style
+                      # 1. Force ProvisioningStyle to Manual for the whole project
                       content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
-                      content = re.sub(r'DevelopmentTeam = [^;]+;', f'DevelopmentTeam = {team};', content)
                       
-                      # Re-insert Profile UUID into TargetAttributes if missing
-                      if 'ProvisioningStyle = Manual;' in content and 'ProvisioningProfile = ' not in content:
-                          content = content.replace('ProvisioningStyle = Manual;', f'ProvisioningStyle = Manual;\n\t\t\t\t\tProvisioningProfile = \"{uuid}\";')
+                      # 2. Inject Profile Info into TargetAttributes block
+                      # This solves the 'Select a provisioning profile' error in the UI
+                      attr_patch = f'ProvisioningStyle = Manual;\n\t\t\t\t\tProvisioningProfile = \"{uuid}\";\n\t\t\t\t\tProvisioningProfileSpecifier = \"{name}\";'
+                      content = content.replace('ProvisioningStyle = Manual;', attr_patch)
 
-                      # Clean and Re-inject Build Settings for all configurations
-                      content = re.sub(r'PROVISIONING_PROFILE = [^;]+;', '', content)
-                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', '', content)
-                      content = re.sub(r'CODE_SIGN_STYLE = [^;]+;', '', content)
-                      content = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', '', content)
+                      # 3. Clean and Hard-set Build Settings
+                      for key in ['PROVISIONING_PROFILE', 'PROVISIONING_PROFILE_SPECIFIER', 'CODE_SIGN_STYLE', 'DEVELOPMENT_TEAM']:
+                          content = re.sub(f'{key} = [^;]+;', '', content)
                       
-                      new_settings = (f'\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";' +
-                                     f'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";' +
-                                     f'\n\t\t\t\tDEVELOPMENT_TEAM = {team};' +
-                                     '\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
-                                     '\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
-                                     '\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
+                      settings = (f'\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";' +
+                                 f'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";' +
+                                 f'\n\t\t\t\tDEVELOPMENT_TEAM = {team};' +
+                                 '\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
+                                 '\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
+                                 '\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
                       
-                      content = re.sub(r'(buildSettings = \{)', r'\1' + new_settings, content)
+                      content = re.sub(r'(buildSettings = \{)', r'\1' + settings, content)
 
                       with open(path, 'w') as f: f.write(content)
           "
 
-          # 6. ARCHIVE - Added explicitly defined profile variables
+          # 6. ARCHIVE - Adding UseModernBuildSystem=NO as a fallback if needed
           mkdir -p build/ios/xcarchive
           xcodebuild \
             -project "$XCODE_PROJECT" \
@@ -115,18 +113,18 @@ workflows:
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
+            -allowProvisioningUpdates \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
-            -allowProvisioningUpdates \
             clean archive | tee xcodebuild_archive.log
 
           # 7. EXPORT
           if [ ! -d "build/ios/xcarchive/App.xcarchive" ]; then
              echo "ERROR: Archive failed. Reviewing logs..."
-             tail -n 50 xcodebuild_archive.log
+             tail -n 100 xcodebuild_archive.log
              exit 1
           fi
 
@@ -145,7 +143,7 @@ workflows:
           git config --global user.name "Codemagic Builder"
           find . -name "project.pbxproj" -exec git add {} +
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: deep injection of provisioning profile UUID into target attributes"
+            git commit -m "fix: total manual signing override for Xcode 26.2"
             git push origin HEAD:main
           else
             echo "No changes to sync."
