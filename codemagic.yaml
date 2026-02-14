@@ -18,88 +18,39 @@ workflows:
         script: npm install
       - name: Capacitor Sync
         script: npx cap sync ios
-      - name: Decode API Key and Setup Signing
+      - name: Build and Sign iOS App
         script: |
-          # 1. Force check for variable presence
+          # 1. Decode Key inside the same script block to ensure persistence
           if [ -z "$PRIVATE_KEY" ]; then
-            echo "ERROR: PRIVATE_KEY variable is missing. Check apple_auth group in Codemagic."
+            echo "ERROR: PRIVATE_KEY variable is missing."
             exit 1
           fi
 
-          # 2. Binary-safe Python Decoding
           python3 <<'EOF'
-          import os
-          import base64
-          import sys
-
-          # Get the key from the environment variable named in your screenshot
-          encoded_key = os.environ.get('PRIVATE_KEY', '')
-          
+          import os, base64
+          data = os.environ.get('PRIVATE_KEY', '').strip()
           try:
-              # Strip whitespace and decode
-              clean_b64 = "".join(encoded_key.split())
-              decoded_bytes = base64.b64decode(clean_b64)
-              
-              # Write to /tmp/ with absolute path
-              with open('/tmp/Apple_API_Key.p8', 'wb') as f:
-                  f.write(decoded_bytes)
-              
-              # Verify the file was actually written
-              if os.path.getsize('/tmp/Apple_API_Key.p8') > 0:
-                  print("SUCCESS: /tmp/Apple_API_Key.p8 created successfully.")
-              else:
-                  raise Exception("File created but is empty.")
-                  
+              decoded = base64.b64decode("".join(data.split()))
+              with open('/Users/builder/key.p8', 'wb') as f:
+                  f.write(decoded)
+              print("SUCCESS: Key written to /Users/builder/key.p8")
           except Exception as e:
-              print(f"FAILED: {e}")
-              sys.exit(1)
+              print(f"Decode Failed: {e}")
+              exit(1)
           EOF
 
-          chmod 600 /tmp/Apple_API_Key.p8
+          chmod 600 /Users/builder/key.p8
           
-          # 3. Setup Keychain & Profiles
+          # 2. Setup Keychain & Profiles
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # 4. Extract Profile UUID
+          # 3. Extract Profile UUID
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
-          echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 5. Export Options
-          cat <<EOF > /tmp/exportOptions.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store</string>
-              <key>teamID</key>
-              <string>$DEVELOPMENT_TEAM</string>
-              <key>provisioningProfiles</key>
-              <dict>
-                  <key>$BUNDLE_ID</key>
-                  <string>$PROV_PROFILE_UUID</string>
-              </dict>
-              <key>signingStyle</key>
-              <string>manual</string>
-              <key>signingCertificate</key>
-              <string>Apple Distribution</string>
-          </dict>
-          </plist>
-          EOF
-      - name: Build iOS App
-        script: |
-          # Final check before build
-          if [ ! -s /tmp/Apple_API_Key.p8 ]; then
-            echo "Error: Key file /tmp/Apple_API_Key.p8 is missing or empty."
-            exit 1
-          fi
-
-          # Map ISSUER_ID from your variables
-          FINAL_ISSUER="${ISSUER_ID:-$APP_STORE_CONNECT_ISSUER_ID}"
-
+          # 4. Build with Explicit Path
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -107,9 +58,8 @@ workflows:
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            -authenticationKeyIssuerID "$FINAL_ISSUER" \
-            -authenticationKeyPath "/tmp/Apple_API_Key.p8" \
-            -exportOptionsPlist /tmp/exportOptions.plist \
+            -authenticationKeyIssuerID "${ISSUER_ID}" \
+            -authenticationKeyPath "/Users/builder/key.p8" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
