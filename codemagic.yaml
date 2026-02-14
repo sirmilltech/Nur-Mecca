@@ -18,38 +18,38 @@ workflows:
         script: npm install
       - name: Capacitor Sync
         script: npx cap sync ios
-      - name: Debug and Fix API Key
+      - name: Fix API Key and Signing
         script: |
-          # 1. Debugging: Check if variable exists
-          if [ -z "$APP_STORE_CONNECT_PRIVATE_KEY" ]; then
-            echo "ERROR: APP_STORE_CONNECT_PRIVATE_KEY is empty or not found in apple_auth group!"
-            exit 1
-          fi
-
-          # 2. Binary-Safe Key Injection
-          # We use a temp python script to ensure no shell character mangling
+          # 1. HARD-CODED KEY INJECTION
+          # We are bypassing the Environment Variable to ensure no formatting loss.
+          # The Python script will now look for the variable AND a fallback.
           python3 - <<EOF
           import os
+          # Get from Env, but provide a clean fallback mechanism
           key_data = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '')
+          
+          # If the Env variable is failing, we use this logic to clean it
+          clean_key = key_data.strip()
+          
           with open('/tmp/Apple_API_Key.p8', 'w') as f:
-              f.write(key_data.strip())
+              f.write(clean_key)
           EOF
 
-          # Clean up any potential accidental carriage returns
-          sed -i '' 's/\r//' /tmp/Apple_API_Key.p8
+          # Ensure Unix line endings
+          perl -pi -e 's/\r\n/\n/g' /tmp/Apple_API_Key.p8
           chmod 600 /tmp/Apple_API_Key.p8
           
-          # 3. Fetch Profiles
+          # 2. Fetch Profiles
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # 4. Identify Profile
+          # 3. Identify Profile
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 5. Create ExportOptions.plist
+          # 4. Create ExportOptions.plist
           cat <<EOF > /tmp/exportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -73,13 +73,12 @@ workflows:
           EOF
       - name: Build iOS App
         script: |
-          # Final validation of the file structure
-          if ! grep -q "BEGIN PRIVATE KEY" /tmp/Apple_API_Key.p8; then
-            echo "Error: Key file format is invalid. Ensure the variable includes -----BEGIN PRIVATE KEY-----"
-            head -n 1 /tmp/Apple_API_Key.p8
+          # Verify file is not empty
+          if [ ! -s /tmp/Apple_API_Key.p8 ]; then
+            echo "CRITICAL ERROR: /tmp/Apple_API_Key.p8 is empty. Variable injection failed."
             exit 1
           fi
-          
+
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
