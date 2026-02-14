@@ -20,21 +20,22 @@ workflows:
         script: npx cap sync ios
       - name: Fix API Key and Signing
         script: |
-          # 1. Clean and Save API Key (Handles both Base64 and Raw Text)
-          # This python script removes any accidental spaces/newlines from the secret
+          # 1. Force-Format PEM Key
+          # This script takes your variable and REBUILDS it from scratch to ensure Apple accepts it.
           python3 - <<EOF
-          import os, base64
-          raw_key = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '').strip()
+          import os
+          raw = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '').strip()
+          # Remove any headers/footers the user might have pasted to get just the base64 body
+          clean_body = raw.replace('-----BEGIN PRIVATE KEY-----', '').replace('-----END PRIVATE KEY-----', '').strip()
+          # Remove all whitespaces, newlines, and tabs
+          clean_body = "".join(clean_body.split())
+          
           with open('/tmp/Apple_API_Key.p8', 'w') as f:
-              if "-----BEGIN" in raw_key:
-                  f.write(raw_key)
-              else:
-                  # Try decoding if it looks like base64
-                  try:
-                      decoded = base64.b64decode(raw_key).decode('utf-8')
-                      f.write(decoded)
-                  except:
-                      f.write(raw_key)
+              f.write("-----BEGIN PRIVATE KEY-----\n")
+              # Apple requires exactly 64 characters per line
+              for i in range(0, len(clean_body), 64):
+                  f.write(clean_body[i:i+64] + "\n")
+              f.write("-----END PRIVATE KEY-----\n")
           EOF
           chmod 600 /tmp/Apple_API_Key.p8
           
@@ -72,8 +73,8 @@ workflows:
           EOF
       - name: Build iOS App
         script: |
-          # Verify key exists before building
-          if [ ! -f /tmp/Apple_API_Key.p8 ]; then echo "Error: API Key file missing"; exit 1; fi
+          # Check if the key was generated successfully
+          if [ ! -s /tmp/Apple_API_Key.p8 ]; then echo "API Key is empty!"; exit 1; fi
           
           xcodebuild \
             -project "$XCODE_PROJECT" \
