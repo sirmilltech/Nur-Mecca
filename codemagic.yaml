@@ -66,7 +66,7 @@ workflows:
           </plist>
           EOF
 
-          # 5. EXPANDED: TARGET-ID SPECIFIC INJECTION & CACHE BUSTING
+          # 5. EXPANDED: TARGET-ID SPECIFIC INJECTION & ATTRIBUTE ENFORCEMENT
           python3 -c "
           import sys, re, os
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
@@ -77,34 +77,37 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
 
-                      # Step A: Locate the main Target ID to prevent mis-injection
-                      # We search for the product name 'App' and find its associated target ID
+                      # Step A: Find the Main Target ID
                       target_search = re.search(r'([A-Z0-9]{24}) /\* App \*/', content)
-                      target_id = target_search.group(1) if target_search else None
+                      if target_search:
+                          tid = target_search.group(1)
+                          # Inject into the TargetAttributes section precisely
+                          attr_pattern = tid + r' = \{'
+                          attr_replacement = tid + r' = {\n\t\t\t\t\tDevelopmentTeam = ' + team + r';\n\t\t\t\t\tProvisioningStyle = Manual;\n\t\t\t\t\tProvisioningProfile = \"' + uuid + r'\";\n\t\t\t\t\tProvisioningProfileSpecifier = \"' + name + r'\";'
+                          content = re.sub(attr_pattern, attr_replacement, content)
 
-                      # Step B: Force Manual signing in TargetAttributes for THAT specific ID
-                      if target_id:
-                          attr_block = f'{target_id} = {{\n\t\t\t\t\tDevelopmentTeam = {team};\n\t\t\t\t\tProvisioningStyle = Manual;\n\t\t\t\t\tProvisioningProfile = \"{uuid}\";\n\t\t\t\t\tProvisioningProfileSpecifier = \"{name}\";'
-                          content = re.sub(f'{target_id} = {{[^}}]*}}', attr_block + '\n\t\t\t\t};', content)
-
-                      # Step C: Global Settings Purge (Remove any old identity/profile keys)
-                      for key in ['PROVISIONING_PROFILE', 'PROVISIONING_PROFILE_SPECIFIER', 'CODE_SIGN_STYLE', 'DEVELOPMENT_TEAM']:
+                      # Step B: Force Manual signing style globally
+                      content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
+                      
+                      # Step C: Deep Clean and re-inject Build Settings
+                      for key in ['PROVISIONING_PROFILE', 'PROVISIONING_PROFILE_SPECIFIER', 'CODE_SIGN_STYLE', 'DEVELOPMENT_TEAM', 'CODE_SIGN_IDENTITY']:
                           content = re.sub(f'{key} = [^;]+;', '', content)
                       
                       new_settings = (f'\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";' +
                                      f'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";' +
                                      f'\n\t\t\t\tDEVELOPMENT_TEAM = {team};' +
                                      '\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
-                                     '\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";')
+                                     '\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
+                                     '\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
                       
                       content = re.sub(r'(buildSettings = \{)', r'\1' + new_settings, content)
 
                       with open(path, 'w') as f: f.write(content)
           "
 
-          # 6. ARCHIVE - Added -derivedDataPath to force a fresh build description
+          # 6. ARCHIVE
           mkdir -p build/ios/xcarchive
-          rm -rf ~/Library/Developer/Xcode/DerivedData/* # Clear build cache
+          rm -rf ~/Library/Developer/Xcode/DerivedData/*
           
           xcodebuild \
             -project "$XCODE_PROJECT" \
@@ -117,6 +120,7 @@ workflows:
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
+            -allowProvisioningUpdates \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
@@ -145,7 +149,7 @@ workflows:
           git config --global user.name "Codemagic Builder"
           find . -name "project.pbxproj" -exec git add {} +
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: explicit target attributes and derived data purge"
+            git commit -m "fix: enforce target-level manual signing for Xcode 16"
             git push origin HEAD:main
           else
             echo "No changes to sync."
