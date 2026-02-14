@@ -54,7 +54,7 @@ workflows:
           
           echo "Using Provisioning Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
 
-          # 5. Build with forced signing parameters (Expanded to force recognition)
+          # 5. Build with forced signing parameters (Expanded with explicit SDK and Identity flags)
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
