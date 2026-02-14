@@ -18,38 +18,26 @@ workflows:
         script: npm install
       - name: Capacitor Sync
         script: npx cap sync ios
-      - name: Fix API Key and Signing
+      - name: Decode API Key and Setup Signing
         script: |
-          # 1. HARD-CODED KEY INJECTION
-          # We are bypassing the Environment Variable to ensure no formatting loss.
-          # The Python script will now look for the variable AND a fallback.
-          python3 - <<EOF
-          import os
-          # Get from Env, but provide a clean fallback mechanism
-          key_data = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '')
-          
-          # If the Env variable is failing, we use this logic to clean it
-          clean_key = key_data.strip()
-          
-          with open('/tmp/Apple_API_Key.p8', 'w') as f:
-              f.write(clean_key)
-          EOF
-
-          # Ensure Unix line endings
-          perl -pi -e 's/\r\n/\n/g' /tmp/Apple_API_Key.p8
+          # 1. Decode Base64 Key to File
+          # This prevents any shell-based corruption of the PEM structure
+          echo "$APP_STORE_CONNECT_PRIVATE_KEY" | base64 -d > /tmp/Apple_API_Key.p8
           chmod 600 /tmp/Apple_API_Key.p8
           
-          # 2. Fetch Profiles
+          # 2. Initialize Keychain
           keychain initialize
+          
+          # 3. Fetch Signing Files
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # 3. Identify Profile
+          # 4. Identify Provisioning Profile
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 4. Create ExportOptions.plist
+          # 5. Create ExportOptions.plist
           cat <<EOF > /tmp/exportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -73,12 +61,12 @@ workflows:
           EOF
       - name: Build iOS App
         script: |
-          # Verify file is not empty
-          if [ ! -s /tmp/Apple_API_Key.p8 ]; then
-            echo "CRITICAL ERROR: /tmp/Apple_API_Key.p8 is empty. Variable injection failed."
+          # Verify file header exists after decoding
+          if ! grep -q "BEGIN PRIVATE KEY" /tmp/Apple_API_Key.p8; then
+            echo "Error: Decoded file is not a valid PEM key. Check your Base64 variable."
             exit 1
           fi
-
+          
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
