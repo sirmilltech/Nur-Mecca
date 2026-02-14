@@ -54,9 +54,14 @@ workflows:
           
           echo "Using Provisioning Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
 
-          # 5. Injection Expansion: Force project file to accept these specific IDs
-          # This writes the detected UUID directly into the build settings as a fallback
+          # 5. Injection Expansion: Hard-code the detected IDs into the project file
+          # This ensures the build target cannot ignore the provisioning profile
           sed -i '' "s/CODE_SIGN_IDENTITY = \".*\";/CODE_SIGN_IDENTITY = \"Apple Distribution\";/g" ios/App/App.xcodeproj/project.pbxproj
+          
+          # Inject the specific profile and specifier into the build settings
+          sed -i '' "/CODE_SIGN_IDENTITY = \"Apple Distribution\";/a \\
+          PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";\\
+          PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_NAME\";" ios/App/App.xcodeproj/project.pbxproj
 
           # 6. Build with forced signing parameters
           xcodebuild \
