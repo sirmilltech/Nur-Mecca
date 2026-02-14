@@ -65,11 +65,13 @@ workflows:
           </plist>
           EOF
 
-          # 4. SURGICAL PROJECT PATCHING
-          # Remove Automatic signing references
+          # 4. EXTREME PROJECT PATCHING
+          # Wipe all Automatic flags and existing Identities
           find . -name "project.pbxproj" -exec sed -i '' "s/ProvisioningStyle = Automatic/ProvisioningStyle = Manual/g" {} +
           find . -name "project.pbxproj" -exec sed -i '' "s/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g" {} +
-          
+          find . -name "project.pbxproj" -exec sed -i '' "s/CODE_SIGN_IDENTITY = \"iPhone Developer\"/CODE_SIGN_IDENTITY = \"Apple Distribution\"/g" {} +
+          find . -name "project.pbxproj" -exec sed -i '' "s/CODE_SIGN_IDENTITY\[sdk=iphoneos\*\] = \"iPhone Developer\"/CODE_SIGN_IDENTITY = \"Apple Distribution\"/g" {} +
+
           python3 -c "
           import sys, re, os
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
@@ -78,21 +80,25 @@ workflows:
                   if file == 'project.pbxproj':
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
-                      # Inject into every buildSettings block
+                      
+                      # Inject Manual Settings and Profile UUID into every build block
                       pattern = r'(buildSettings = \{)'
                       replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
                                      r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
                                      r'\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';' +
                                      r'\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
-                                     r'\n\t\t\t\tSKIP_INSTALL = NO;' +
-                                     r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";')
+                                     r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
+                                     r'\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
+                      
                       new_content = re.sub(pattern, replacement, content)
-                      # Ensure ProvisioningStyle is also set to Manual in the Target attributes
+                      
+                      # Target Attribute Clean-up (Removes local developer team associations)
                       new_content = new_content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
+                      
                       with open(path, 'w') as f: f.write(new_content)
           "
 
-          # 5. Execute ARCHIVE
+          # 5. Execute ARCHIVE with explicit Profile mapping
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -125,7 +131,7 @@ workflows:
           git add codemagic.yaml
           git add ios/App/App.xcodeproj/project.pbxproj
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: hard-code provisioning profile in pbxproj buildSettings"
+            git commit -m "fix: extreme pbxproj patch to force manual distribution identity"
             git push origin HEAD:main
           else
             echo "No changes to sync."
