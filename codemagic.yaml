@@ -20,24 +20,43 @@ workflows:
         script: npx cap sync ios
       - name: Decode API Key and Setup Signing
         script: |
-          # 1. Decode Base64 Key to File
-          # This prevents any shell-based corruption of the PEM structure
-          echo "$APP_STORE_CONNECT_PRIVATE_KEY" | base64 -d > /tmp/Apple_API_Key.p8
+          # 1. Robust Python-based Base64 Decoding
+          # This avoids shell-interpolation issues with the $ sign or newlines
+          python3 - <<EOF
+          import os
+          import base64
+          
+          encoded_key = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '')
+          if not encoded_key:
+              print("ERROR: APP_STORE_CONNECT_PRIVATE_KEY is empty!")
+              exit(1)
+          
+          try:
+              # Remove any whitespace that might have been accidentally pasted
+              clean_b64 = "".join(encoded_key.split())
+              decoded_bytes = base64.b64decode(clean_b64)
+              
+              with open('/tmp/Apple_API_Key.p8', 'wb') as f:
+                  f.write(decoded_bytes)
+              print("Successfully decoded API Key to /tmp/Apple_API_Key.p8")
+          except Exception as e:
+              print(f"FAILED to decode Base64: {e}")
+              exit(1)
+          EOF
+
           chmod 600 /tmp/Apple_API_Key.p8
           
-          # 2. Initialize Keychain
+          # 2. Fetch Profiles
           keychain initialize
-          
-          # 3. Fetch Signing Files
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # 4. Identify Provisioning Profile
+          # 3. Identify Profile
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 5. Create ExportOptions.plist
+          # 4. Create ExportOptions.plist
           cat <<EOF > /tmp/exportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -61,9 +80,9 @@ workflows:
           EOF
       - name: Build iOS App
         script: |
-          # Verify file header exists after decoding
-          if ! grep -q "BEGIN PRIVATE KEY" /tmp/Apple_API_Key.p8; then
-            echo "Error: Decoded file is not a valid PEM key. Check your Base64 variable."
+          # Verify header check
+          if ! grep -q "PRIVATE KEY" /tmp/Apple_API_Key.p8; then
+            echo "Error: The decoded file does not contain a valid PEM header."
             exit 1
           fi
           
