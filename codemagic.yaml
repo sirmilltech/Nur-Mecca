@@ -66,7 +66,7 @@ workflows:
           </plist>
           EOF
 
-          # 5. AGGRESSIVE TARGET INJECTION (Solving Xcode 16 Provisioning Error)
+          # 5. GLOBAL TARGET & ATTRIBUTE SWEEP (Expanded Correction)
           python3 -c "
           import sys, re, os
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
@@ -77,18 +77,18 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
 
-                      # 1. Force Manual Style globally
+                      # Step A: Force ProvisioningStyle to Manual for ALL targets
                       content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
                       
-                      # 2. Hard-inject Profile into TargetAttributes block
-                      # We look for the Attributes block and ensure the target entry contains the UUID
-                      attr_pattern = r'(TargetAttributes = \{.*?\n\t\t\t\t\t\t)([^}]*?)(Style = Manual;)'
-                      replacement = r'\1\2Style = Manual;\n\t\t\t\t\t\tProvisioningProfile = \"' + uuid + r'\";\n\t\t\t\t\t\tProvisioningProfileSpecifier = \"' + name + r'\";'
-                      
-                      if 'ProvisioningProfile' not in content:
-                          content = re.sub(attr_pattern, replacement, content, flags=re.DOTALL)
+                      # Step B: Inject UUID/Name into the TargetAttributes dictionary
+                      # This ensures the 'Signing & Capabilities' UI in Xcode is satisfied
+                      target_attr_marker = 'TargetAttributes = {'
+                      if target_attr_marker in content:
+                          injection = f'\n\t\t\t\t\tProvisioningProfile = \"{uuid}\";\n\t\t\t\t\tProvisioningProfileSpecifier = \"{name}\";'
+                          content = content.replace('ProvisioningStyle = Manual;', f'ProvisioningStyle = Manual;{injection}')
 
-                      # 3. Clean and re-inject Build Settings
+                      # Step C: Heavy-handed Build Settings Overwrite
+                      # We remove existing keys first to avoid duplicates
                       for key in ['PROVISIONING_PROFILE', 'PROVISIONING_PROFILE_SPECIFIER', 'CODE_SIGN_STYLE', 'DEVELOPMENT_TEAM']:
                           content = re.sub(f'{key} = [^;]+;', '', content)
                       
@@ -99,6 +99,7 @@ workflows:
                                      '\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
                                      '\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
                       
+                      # Inject into EVERY buildSettings block
                       content = re.sub(r'(buildSettings = \{)', r'\1' + new_settings, content)
 
                       with open(path, 'w') as f: f.write(content)
@@ -116,17 +117,18 @@ workflows:
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
+            -allowProvisioningUpdates \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
-            -allowProvisioningUpdates \
             clean archive | tee xcodebuild_archive.log
 
           # 7. EXPORT
           if [ ! -d "build/ios/xcarchive/App.xcarchive" ]; then
-              echo "ERROR: Archive failed. Review logs above."
+              echo "ERROR: Archive failed. Reviewing logs..."
+              tail -n 50 xcodebuild_archive.log
               exit 1
           fi
 
@@ -145,7 +147,7 @@ workflows:
           git config --global user.name "Codemagic Builder"
           find . -name "project.pbxproj" -exec git add {} +
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: force target-level provisioning for Xcode 16"
+            git commit -m "fix: global provisioning sweep for Xcode 16 targets"
             git push origin HEAD:main
           else
             echo "No changes to sync."
