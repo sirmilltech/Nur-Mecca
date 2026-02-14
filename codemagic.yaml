@@ -66,38 +66,36 @@ workflows:
           </plist>
           EOF
 
-          # 5. RECURSIVE MULTI-PROJECT PATCHING (Fixes CapApp-SPM dependencies)
+          # 5. ADVANCED RECURSIVE PATCHING (Targets TargetAttributes + BuildSettings)
           python3 -c "
           import sys, re, os
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
           
-          # We search for all project files to capture the main app AND the CapApp-SPM dependency project
           for root, dirs, files in os.walk('.'):
               for file in files:
                   if file == 'project.pbxproj':
                       path = os.path.join(root, file)
-                      print(f'Patching: {path}')
                       with open(path, 'r') as f: content = f.read()
 
-                      # Force Manual Signing Style in TargetAttributes
-                      content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
-                      content = content.replace('ProvisioningStyle = \"Automatic\";', 'ProvisioningStyle = Manual;')
+                      # Fix A: Force Manual Signing in TargetAttributes (The UI Toggle)
+                      content = re.sub(r'ProvisioningStyle = [A-Za-z]+;', 'ProvisioningStyle = Manual;', content)
                       
-                      # Force Team ID globally
+                      # Fix B: Global Team ID
                       content = re.sub(r'DevelopmentTeam = [A-Z0-9]+;', f'DevelopmentTeam = {team};', content)
 
-                      # Clean existing profiles to prevent conflicts
+                      # Fix C: Force Profile UUID and Specifier into Build Settings
+                      # We wipe existing ones first to prevent duplicates
                       content = re.sub(r'PROVISIONING_PROFILE = \"[^\"]*\";', '', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = \"[^\"]*\";', '', content)
                       
-                      # Inject new settings into every buildSettings block found
                       settings_to_add = [
                           f'PROVISIONING_PROFILE = \"{uuid}\";',
                           f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";',
                           f'DEVELOPMENT_TEAM = {team};',
                           'CODE_SIGN_STYLE = Manual;',
                           'CODE_SIGN_IDENTITY = \"Apple Distribution\";',
-                          '\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";'
+                          '\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";',
+                          'AD_HOC_CODE_SIGNING_ALLOWED = YES;'
                       ]
                       
                       pattern = r'(buildSettings = \{)'
@@ -107,7 +105,8 @@ workflows:
                       with open(path, 'w') as f: f.write(content)
           "
 
-          # 6. ARCHIVE with explicit Flag Overrides for all Targets
+          # 6. ARCHIVE with strict path creation and target overrides
+          mkdir -p build/ios/xcarchive
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -117,15 +116,19 @@ workflows:
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
-            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
+            -allowProvisioningUpdates \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGN_STYLE=Manual \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            CODE_SIGN_STYLE="Manual" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            -allowProvisioningUpdates \
-            clean archive
+            clean archive | tee xcodebuild_archive.log
 
-          # 7. EXPORT
+          # 7. EXPORT (Check if archive exists first to provide better error logging)
+          if [ ! -d "build/ios/xcarchive/App.xcarchive" ]; then
+             echo "Error: Archive failed to generate. Check xcodebuild_archive.log"
+             exit 1
+          fi
+
           xcodebuild \
             -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
@@ -134,15 +137,14 @@ workflows:
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
-      
+
       - name: Sync Back to Repository
         script: |
           git config --global user.email "builder@codemagic.io"
           git config --global user.name "Codemagic Builder"
-          # Add all project files that were modified by the recursive patch
           find . -name "project.pbxproj" -exec git add {} +
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: recursive manual signing patch for app and SPM dependencies"
+            git commit -m "fix: explicit archive path and target signing overrides"
             git push origin HEAD:main
           else
             echo "No changes to sync."
