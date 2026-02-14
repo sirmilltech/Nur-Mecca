@@ -65,13 +65,11 @@ workflows:
           </plist>
           EOF
 
-          # 4. EXTREME PROJECT PATCHING
-          # Wipe all Automatic flags and existing Identities
+          # 4. NUCLEAR SIGNING WIPE & TARGET PATCHING
+          # Remove any mention of Automatic or Developer identities at the text level
           find . -name "project.pbxproj" -exec sed -i '' "s/ProvisioningStyle = Automatic/ProvisioningStyle = Manual/g" {} +
           find . -name "project.pbxproj" -exec sed -i '' "s/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g" {} +
-          find . -name "project.pbxproj" -exec sed -i '' "s/CODE_SIGN_IDENTITY = \"iPhone Developer\"/CODE_SIGN_IDENTITY = \"Apple Distribution\"/g" {} +
-          find . -name "project.pbxproj" -exec sed -i '' "s/CODE_SIGN_IDENTITY\[sdk=iphoneos\*\] = \"iPhone Developer\"/CODE_SIGN_IDENTITY = \"Apple Distribution\"/g" {} +
-
+          
           python3 -c "
           import sys, re, os
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
@@ -81,7 +79,7 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # Inject Manual Settings and Profile UUID into every build block
+                      # Step A: Inject Manual Distribution Settings into ALL buildSettings blocks
                       pattern = r'(buildSettings = \{)'
                       replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
                                      r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
@@ -89,13 +87,14 @@ workflows:
                                      r'\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
                                      r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
                                      r'\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
+                      content = re.sub(pattern, replacement, content)
                       
-                      new_content = re.sub(pattern, replacement, content)
+                      # Step B: Force TargetAttributes to use Manual and the correct Team
+                      # This fixes the 'Select a provisioning profile' error in the target editor
+                      content = re.sub(r'DevelopmentTeam = [A-Z0-9]+;', f'DevelopmentTeam = {team};', content)
+                      content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
                       
-                      # Target Attribute Clean-up (Removes local developer team associations)
-                      new_content = new_content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
-                      
-                      with open(path, 'w') as f: f.write(new_content)
+                      with open(path, 'w') as f: f.write(content)
           "
 
           # 5. Execute ARCHIVE with explicit Profile mapping
@@ -112,6 +111,7 @@ workflows:
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGN_STYLE="Manual" \
             clean archive
 
           # 6. Execute EXPORT
@@ -131,7 +131,7 @@ workflows:
           git add codemagic.yaml
           git add ios/App/App.xcodeproj/project.pbxproj
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: extreme pbxproj patch to force manual distribution identity"
+            git commit -m "fix: nuclear pbxproj patch to resolve target signing requirements"
             git push origin HEAD:main
           else
             echo "No changes to sync."
