@@ -38,12 +38,16 @@ workflows:
             --create
           keychain add-certificates
           
-          # 3. Detect the Profile UUID that was just downloaded
+          # 3. Force the Project to use the Team ID (Fix for Status 65)
+          # This replaces any placeholder Team ID in the Xcode project with your actual ID
+          sed -i '' "s/DevelopmentTeam = \".*\";/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" ios/App/App.xcodeproj/project.pbxproj
+
+          # 4. Detect the Profile UUID
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
           echo "Using Provisioning Profile UUID: $PROV_PROFILE_UUID"
 
-          # 4. Build using explicit Profile UUID to fix Status 65
+          # 5. Build with explicit signing parameters
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
