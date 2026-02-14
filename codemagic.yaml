@@ -66,7 +66,7 @@ workflows:
           </plist>
           EOF
 
-          # 5. ENHANCED PROJECT PATCHING (Target Attributes & Build Settings)
+          # 5. DEEP TARGET INJECTION (Target Attributes & Build Settings)
           python3 -c "
           import sys, re, os
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
@@ -77,11 +77,15 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
 
-                      # Fix TargetAttributes: Explicitly set Manual style for the Target App
+                      # Fix TargetAttributes: Force ProvisioningProfile and Style
                       content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
                       content = re.sub(r'DevelopmentTeam = [^;]+;', f'DevelopmentTeam = {team};', content)
                       
-                      # Clean and Re-inject Build Settings
+                      # Re-insert Profile UUID into TargetAttributes if missing
+                      if 'ProvisioningStyle = Manual;' in content and 'ProvisioningProfile = ' not in content:
+                          content = content.replace('ProvisioningStyle = Manual;', f'ProvisioningStyle = Manual;\n\t\t\t\t\tProvisioningProfile = \"{uuid}\";')
+
+                      # Clean and Re-inject Build Settings for all configurations
                       content = re.sub(r'PROVISIONING_PROFILE = [^;]+;', '', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', '', content)
                       content = re.sub(r'CODE_SIGN_STYLE = [^;]+;', '', content)
@@ -99,7 +103,7 @@ workflows:
                       with open(path, 'w') as f: f.write(content)
           "
 
-          # 6. ARCHIVE - Explicitly mapping all signing variables
+          # 6. ARCHIVE - Added explicitly defined profile variables
           mkdir -p build/ios/xcarchive
           xcodebuild \
             -project "$XCODE_PROJECT" \
@@ -122,7 +126,7 @@ workflows:
           # 7. EXPORT
           if [ ! -d "build/ios/xcarchive/App.xcarchive" ]; then
              echo "ERROR: Archive failed. Reviewing logs..."
-             tail -n 20 xcodebuild_archive.log
+             tail -n 50 xcodebuild_archive.log
              exit 1
           fi
 
@@ -141,7 +145,7 @@ workflows:
           git config --global user.name "Codemagic Builder"
           find . -name "project.pbxproj" -exec git add {} +
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: explicit target-level signing override for target App"
+            git commit -m "fix: deep injection of provisioning profile UUID into target attributes"
             git push origin HEAD:main
           else
             echo "No changes to sync."
