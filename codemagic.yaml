@@ -20,18 +20,16 @@ workflows:
         script: npx cap sync ios
       - name: Build and Sign iOS App
         script: |
-          # 1. Setup the API Key file
+          # 1. Setup the API Key file (Matches the version that worked)
           if [ -z "$PRIVATE_KEY" ]; then
             echo "ERROR: PRIVATE_KEY variable is missing."
             exit 1
           fi
 
-          # Save key to a reliable local directory
           mkdir -p ~/.appstoreconnect/private_keys
           echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
 
-          # 2. Use Codemagic CLI to fetch/generate everything automatically
-          # This handles certificates, keys, and profiles in one command
+          # 2. Use Codemagic CLI to fetch/generate everything
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --issuer-id "$ISSUER_ID" \
@@ -40,7 +38,7 @@ workflows:
             --create
           keychain add-certificates
           
-          # 3. Build using the profiles fetched in step 2
+          # 3. Build using profiles AND explicit Team ID to fix Error 65
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -51,6 +49,9 @@ workflows:
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
             -allowProvisioningUpdates \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             clean archive
     publishing:
       app_store_connect:
