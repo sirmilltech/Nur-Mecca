@@ -36,13 +36,14 @@ workflows:
             --create
           keychain add-certificates
           
-          # 3. Detect Profile and Create ExportOptions.plist
+          # 3. Detect Profile
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
           PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$PROV_PROFILE_PATH"))
           
           echo "Using Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
 
+          # 4. Create ExportOptions.plist
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -65,37 +66,43 @@ workflows:
           </plist>
           EOF
 
-          # 4. DEEP TARGET ATTRIBUTES FORCING
+          # 5. AGGRESSIVE PBXPROJ PATCHING (Targeting TargetAttributes)
           python3 -c "
           import sys, re, os
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
-          for root, dirs, files in os.walk('.'):
-              for file in files:
-                  if file == 'project.pbxproj':
-                      path = os.path.join(root, file)
-                      with open(path, 'r') as f: content = f.read()
-                      
-                      # Step A: Force global DevelopmentTeam & Provisioning Style
-                      content = re.sub(r'DevelopmentTeam = [A-Z0-9]+;', f'DevelopmentTeam = {team};', content)
-                      content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
-                      
-                      # Step B: Wipe and Re-inject buildSettings with strict quotes
-                      content = re.sub(r'PROVISIONING_PROFILE = \"[^\"]*\";', '', content)
-                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = \"[^\"]*\";', '', content)
-                      
-                      pattern = r'(buildSettings = \{)'
-                      replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
-                                     r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
-                                     r'\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';' +
-                                     r'\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
-                                     r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
-                                     r'\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
-                      content = re.sub(pattern, replacement, content)
-                      
-                      with open(path, 'w') as f: f.write(content)
+          path = '$XCODE_PROJECT/project.pbxproj'
+          with open(path, 'r') as f: content = f.read()
+
+          # Force Manual Signing in TargetAttributes
+          content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
+          
+          # Force Team ID globally
+          content = re.sub(r'DevelopmentTeam = [A-Z0-9]+;', f'DevelopmentTeam = {team};', content)
+
+          # Inject Profile Info into ALL build configurations
+          # This ensures CapApp-SPM and other targets are covered
+          settings_to_add = [
+              f'PROVISIONING_PROFILE = \"{uuid}\";',
+              f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";',
+              f'DEVELOPMENT_TEAM = {team};',
+              'CODE_SIGN_STYLE = Manual;',
+              'CODE_SIGN_IDENTITY = \"Apple Distribution\";',
+              '\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";'
+          ]
+          
+          # Clean existing profiles first
+          content = re.sub(r'PROVISIONING_PROFILE = \"[^\"]*\";', '', content)
+          content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = \"[^\"]*\";', '', content)
+          
+          # Inject new settings
+          pattern = r'(buildSettings = \{)'
+          replacement = r'\1\n\t\t\t\t' + '\n\t\t\t\t'.join(settings_to_add)
+          content = re.sub(pattern, replacement, content)
+
+          with open(path, 'w') as f: f.write(content)
           "
 
-          # 5. Execute ARCHIVE (Using absolute variable overrides to force target compliance)
+          # 6. ARCHIVE with explicit Flag Overrides
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -105,15 +112,14 @@ workflows:
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
-            -allowProvisioningUpdates \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             CODE_SIGN_STYLE="Manual" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
+            -allowProvisioningUpdates \
             clean archive
 
-          # 6. Execute EXPORT
+          # 7. EXPORT
           xcodebuild \
             -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
@@ -122,15 +128,14 @@ workflows:
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
-
+      
       - name: Sync Back to Repository
         script: |
           git config --global user.email "builder@codemagic.io"
           git config --global user.name "Codemagic Builder"
-          git add codemagic.yaml
           git add ios/App/App.xcodeproj/project.pbxproj
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: global session override for manual signing"
+            git commit -m "fix: force manual signing style and provisioning profile specs"
             git push origin HEAD:main
           else
             echo "No changes to sync."
