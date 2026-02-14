@@ -20,23 +20,14 @@ workflows:
         script: npx cap sync ios
       - name: Fix API Key and Signing
         script: |
-          # 1. Force-Format PEM Key
-          # This script takes your variable and REBUILDS it from scratch to ensure Apple accepts it.
-          python3 - <<EOF
-          import os
-          raw = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '').strip()
-          # Remove any headers/footers the user might have pasted to get just the base64 body
-          clean_body = raw.replace('-----BEGIN PRIVATE KEY-----', '').replace('-----END PRIVATE KEY-----', '').strip()
-          # Remove all whitespaces, newlines, and tabs
-          clean_body = "".join(clean_body.split())
-          
-          with open('/tmp/Apple_API_Key.p8', 'w') as f:
-              f.write("-----BEGIN PRIVATE KEY-----\n")
-              # Apple requires exactly 64 characters per line
-              for i in range(0, len(clean_body), 64):
-                  f.write(clean_body[i:i+64] + "\n")
-              f.write("-----END PRIVATE KEY-----\n")
+          # 1. Binary-Safe Key Injection
+          # Using single-quoted EOF prevents the shell from mangling the key content
+          cat << 'EOF' > /tmp/Apple_API_Key.p8
+          $APP_STORE_CONNECT_PRIVATE_KEY
           EOF
+
+          # Clean up any potential accidental carriage returns from Windows copy-paste
+          sed -i '' 's/\r//' /tmp/Apple_API_Key.p8
           chmod 600 /tmp/Apple_API_Key.p8
           
           # 2. Fetch Profiles
@@ -73,8 +64,11 @@ workflows:
           EOF
       - name: Build iOS App
         script: |
-          # Check if the key was generated successfully
-          if [ ! -s /tmp/Apple_API_Key.p8 ]; then echo "API Key is empty!"; exit 1; fi
+          # Final validation of the file structure before xcodebuild starts
+          if ! grep -q "BEGIN PRIVATE KEY" /tmp/Apple_API_Key.p8; then
+            echo "Error: Key file format is invalid (Missing Header)"
+            exit 1
+          fi
           
           xcodebuild \
             -project "$XCODE_PROJECT" \
