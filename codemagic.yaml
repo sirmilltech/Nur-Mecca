@@ -65,8 +65,8 @@ workflows:
           </plist>
           EOF
 
-          # 4. NUCLEAR SIGNING WIPE & TARGET PATCHING
-          # Remove any mention of Automatic or Developer identities at the text level
+          # 4. DEEP UUID REPLACEMENT & TARGET PATCHING
+          # Force Manual signing at the text level
           find . -name "project.pbxproj" -exec sed -i '' "s/ProvisioningStyle = Automatic/ProvisioningStyle = Manual/g" {} +
           find . -name "project.pbxproj" -exec sed -i '' "s/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g" {} +
           
@@ -79,7 +79,11 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # Step A: Inject Manual Distribution Settings into ALL buildSettings blocks
+                      # Replace ANY existing Provisioning Profile UUID with the correct one
+                      content = re.sub(r'PROVISIONING_PROFILE = \"[^\"]*\";', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
+                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = \"[^\"]*\";', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
+                      
+                      # Ensure all build configurations have the settings injected
                       pattern = r'(buildSettings = \{)'
                       replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
                                      r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
@@ -89,8 +93,7 @@ workflows:
                                      r'\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
                       content = re.sub(pattern, replacement, content)
                       
-                      # Step B: Force TargetAttributes to use Manual and the correct Team
-                      # This fixes the 'Select a provisioning profile' error in the target editor
+                      # Clean up TargetAttributes
                       content = re.sub(r'DevelopmentTeam = [A-Z0-9]+;', f'DevelopmentTeam = {team};', content)
                       content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
                       
@@ -118,7 +121,7 @@ workflows:
           xcodebuild \
             -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
-            -exportPath build/ios/ipa \
+            -export_path build/ios/ipa \
             -exportOptionsPlist ExportOptions.plist \
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
@@ -131,7 +134,7 @@ workflows:
           git add codemagic.yaml
           git add ios/App/App.xcodeproj/project.pbxproj
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: nuclear pbxproj patch to resolve target signing requirements"
+            git commit -m "fix: deep UUID replacement for provisioning profiles"
             git push origin HEAD:main
           else
             echo "No changes to sync."
