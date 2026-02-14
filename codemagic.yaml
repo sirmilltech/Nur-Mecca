@@ -66,7 +66,7 @@ workflows:
           </plist>
           EOF
 
-          # 5. NUCLEAR TARGET ATTRIBUTES CLEANING
+          # 5. ENHANCED PROJECT PATCHING (Target Attributes & Build Settings)
           python3 -c "
           import sys, re, os
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
@@ -77,30 +77,29 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
 
-                      # Wipe TargetAttributes signing blocks entirely
-                      content = re.sub(r'ProvisioningStyle = [^;]+;', '', content)
-                      content = re.sub(r'DevelopmentTeam = [^;]+;', '', content)
+                      # Fix TargetAttributes: Explicitly set Manual style for the Target App
+                      content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
+                      content = re.sub(r'DevelopmentTeam = [^;]+;', f'DevelopmentTeam = {team};', content)
                       
-                      # Clean existing build settings
+                      # Clean and Re-inject Build Settings
                       content = re.sub(r'PROVISIONING_PROFILE = [^;]+;', '', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', '', content)
-                      content = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', '', content)
                       content = re.sub(r'CODE_SIGN_STYLE = [^;]+;', '', content)
+                      content = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', '', content)
                       
-                      # Inject mandatory manual signing into every block
-                      settings = (f'\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";' +
-                                 f'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";' +
-                                 f'\n\t\t\t\tDEVELOPMENT_TEAM = {team};' +
-                                 '\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
-                                 '\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
-                                 '\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
+                      new_settings = (f'\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";' +
+                                     f'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";' +
+                                     f'\n\t\t\t\tDEVELOPMENT_TEAM = {team};' +
+                                     '\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
+                                     '\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
+                                     '\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
                       
-                      content = re.sub(r'(buildSettings = \{)', r'\1' + settings, content)
+                      content = re.sub(r'(buildSettings = \{)', r'\1' + new_settings, content)
 
                       with open(path, 'w') as f: f.write(content)
           "
 
-          # 6. ARCHIVE - Use -destination to force generic iOS device selection
+          # 6. ARCHIVE - Explicitly mapping all signing variables
           mkdir -p build/ios/xcarchive
           xcodebuild \
             -project "$XCODE_PROJECT" \
@@ -122,7 +121,8 @@ workflows:
 
           # 7. EXPORT
           if [ ! -d "build/ios/xcarchive/App.xcarchive" ]; then
-             echo "ERROR: Archive failed."
+             echo "ERROR: Archive failed. Reviewing logs..."
+             tail -n 20 xcodebuild_archive.log
              exit 1
           fi
 
@@ -141,7 +141,7 @@ workflows:
           git config --global user.name "Codemagic Builder"
           find . -name "project.pbxproj" -exec git add {} +
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: nuclear clean of signing attributes for target App"
+            git commit -m "fix: explicit target-level signing override for target App"
             git push origin HEAD:main
           else
             echo "No changes to sync."
