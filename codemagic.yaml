@@ -54,8 +54,7 @@ workflows:
           
           echo "Using Provisioning Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
 
-          # 5. DEEP INJECTION: Force profile into every target and build configuration
-          # This addresses the "App requires a provisioning profile" error directly
+          # 5. NUCLEAR PATCH: Force profile into every target and configuration block
           python3 -c "
           import sys, re
           path = 'ios/App/App.xcodeproj/project.pbxproj'
@@ -66,25 +65,27 @@ workflows:
           with open(path, 'r') as f:
               content = f.read()
           
-          # Ensure Manual style and correct identity
+          # 5a. Force Manual signing globally
           content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
           content = content.replace('CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;')
+          
+          # 5b. Force Identity for all builds
           content = re.sub(r'CODE_SIGN_IDENTITY = \".*?\";', 'CODE_SIGN_IDENTITY = \"Apple Distribution\";', content)
           content = re.sub(r'CODE_SIGN_IDENTITY\[sdk=iphoneos\*\] = \".*?\";', 'CODE_SIGN_IDENTITY[sdk=iphoneos*] = \"Apple Distribution\";', content)
           
-          # Inject profile settings into ALL buildSettings blocks
-          profile_settings = f'PROVISIONING_PROFILE = \"{uuid}\";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n\t\t\t\tDEVELOPMENT_TEAM = {team};'
-          
-          # We look for the start of buildSettings and inject our specific profile keys
-          content = re.sub(r'(buildSettings = \{)', r'\1\n\t\t\t\t' + profile_settings, content)
+          # 5c. Use regex to find every buildSettings block and inject the specific profile keys
+          # We check if they already exist to avoid duplicates, otherwise append them
+          pattern = r'(buildSettings = \{)'
+          replacement = r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';'
+          content = re.sub(pattern, replacement, content)
           
           with open(path, 'w') as f:
               f.write(content)
           "
           
-          echo "Deep patch applied to project.pbxproj."
+          echo "Nuclear patch applied to project.pbxproj."
 
-          # 6. Build with forced signing parameters
+          # 6. Build with explicit signing overrides for xcodebuild
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
