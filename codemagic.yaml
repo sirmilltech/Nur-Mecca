@@ -54,7 +54,7 @@ workflows:
           
           echo "Using Provisioning Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
 
-          # 5. Build with forced signing parameters
+          # 5. Build with forced signing parameters (Expanded to force recognition)
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -71,6 +71,8 @@ workflows:
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
+            CODE_SIGNING_REQUIRED=YES \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
             OTHER_CODE_SIGN_FLAGS="--keychain $CM_KEYCHAIN" \
             clean archive
     publishing:
