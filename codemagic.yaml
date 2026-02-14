@@ -18,18 +18,26 @@ workflows:
         script: npm install
       - name: Capacitor Sync
         script: npx cap sync ios
-      - name: Nuclear Signing Reset
+      - name: Fix API Key and Signing
         script: |
-          # 1. Recover API Key from environment (Base64 is safer)
-          # We try to decode it if it's base64, otherwise we take it as raw text
-          if [[ "$APP_STORE_CONNECT_PRIVATE_KEY" == *"-"* ]]; then
-            echo "$APP_STORE_CONNECT_PRIVATE_KEY" > /tmp/Apple_API_Key.p8
-          else
-            echo "$APP_STORE_CONNECT_PRIVATE_KEY" | base64 --decode > /tmp/Apple_API_Key.p8
-          fi
+          # 1. Clean and Save API Key (Handles both Base64 and Raw Text)
+          # This python script removes any accidental spaces/newlines from the secret
+          python3 - <<EOF
+          import os, base64
+          raw_key = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '').strip()
+          with open('/tmp/Apple_API_Key.p8', 'w') as f:
+              if "-----BEGIN" in raw_key:
+                  f.write(raw_key)
+              else:
+                  # Try decoding if it looks like base64
+                  try:
+                      decoded = base64.b64decode(raw_key).decode('utf-8')
+                      f.write(decoded)
+                  except:
+                      f.write(raw_key)
+          EOF
+          chmod 600 /tmp/Apple_API_Key.p8
           
-          export AUTH_KEY_PATH=/tmp/Apple_API_Key.p8
-
           # 2. Fetch Profiles
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
@@ -62,19 +70,11 @@ workflows:
           </dict>
           </plist>
           EOF
-
-          # 5. Scrub project of automatic-only attributes
-          python3 - <<EOF
-          import os, re
-          path = 'ios/App/App.xcodeproj/project.pbxproj'
-          if os.path.exists(path):
-              with open(path, 'r') as f: content = f.read()
-              content = re.sub(r'TargetAttributes = \{.*?\};', 'TargetAttributes = {};', content, flags=re.DOTALL)
-              content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
-              with open(path, 'w') as f: f.write(content)
-          EOF
       - name: Build iOS App
         script: |
+          # Verify key exists before building
+          if [ ! -f /tmp/Apple_API_Key.p8 ]; then echo "Error: API Key file missing"; exit 1; fi
+          
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
