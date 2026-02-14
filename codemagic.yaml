@@ -20,43 +20,50 @@ workflows:
         script: npx cap sync ios
       - name: Decode API Key and Setup Signing
         script: |
-          # 1. Robust Python-based Base64 Decoding
-          # This avoids shell-interpolation issues with the $ sign or newlines
-          python3 - <<EOF
+          # 1. Verification Step (Updated to match your screenshot names)
+          # We check for PRIVATE_KEY first, then the longer name as fallback
+          AUTH_KEY_DATA="${PRIVATE_KEY:-$APP_STORE_CONNECT_PRIVATE_KEY}"
+          
+          if [ -z "$AUTH_KEY_DATA" ]; then
+            echo "CRITICAL ERROR: PRIVATE_KEY is not defined in Codemagic."
+            echo "Your screenshot shows the variable name is 'PRIVATE_KEY'. Ensure it is in the 'apple_auth' group."
+            exit 1
+          fi
+
+          # 2. Python Binary Writer
+          python3 <<'EOF'
           import os
           import base64
-          
-          encoded_key = os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY', '')
-          if not encoded_key:
-              print("ERROR: APP_STORE_CONNECT_PRIVATE_KEY is empty!")
-              exit(1)
+          import sys
+
+          # Match the variable name from your screenshot
+          b64_data = (os.environ.get('PRIVATE_KEY') or os.environ.get('APP_STORE_CONNECT_PRIVATE_KEY') or '').strip()
           
           try:
-              # Remove any whitespace that might have been accidentally pasted
-              clean_b64 = "".join(encoded_key.split())
-              decoded_bytes = base64.b64decode(clean_b64)
+              clean_b64 = "".join(b64_data.split())
+              decoded = base64.b64decode(clean_b64)
               
               with open('/tmp/Apple_API_Key.p8', 'wb') as f:
-                  f.write(decoded_bytes)
-              print("Successfully decoded API Key to /tmp/Apple_API_Key.p8")
+                  f.write(decoded)
+              print("SUCCESS: API Key decoded to /tmp/Apple_API_Key.p8")
           except Exception as e:
-              print(f"FAILED to decode Base64: {e}")
-              exit(1)
+              print(f"ERROR: Base64 decoding failed: {e}")
+              sys.exit(1)
           EOF
 
           chmod 600 /tmp/Apple_API_Key.p8
           
-          # 2. Fetch Profiles
+          # 3. Fetch Profiles
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # 3. Identify Profile
+          # 4. Identify Profile
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
           echo "export PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
-          # 4. Create ExportOptions.plist
+          # 5. Create ExportOptions.plist
           cat <<EOF > /tmp/exportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -80,11 +87,13 @@ workflows:
           EOF
       - name: Build iOS App
         script: |
-          # Verify header check
-          if ! grep -q "PRIVATE KEY" /tmp/Apple_API_Key.p8; then
-            echo "Error: The decoded file does not contain a valid PEM header."
+          if [ ! -f /tmp/Apple_API_Key.p8 ]; then
+            echo "Error: /tmp/Apple_API_Key.p8 was not created."
             exit 1
           fi
+          
+          # Use ISSUER_ID from your screenshot, fallback to long name
+          FINAL_ISSUER_ID="${ISSUER_ID:-$APP_STORE_CONNECT_ISSUER_ID}"
           
           xcodebuild \
             -project "$XCODE_PROJECT" \
@@ -93,7 +102,7 @@ workflows:
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
+            -authenticationKeyIssuerID "$FINAL_ISSUER_ID" \
             -authenticationKeyPath "/tmp/Apple_API_Key.p8" \
             -exportOptionsPlist /tmp/exportOptions.plist \
             CODE_SIGN_STYLE=Manual \
