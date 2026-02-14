@@ -39,14 +39,9 @@ workflows:
           keychain add-certificates
           
           # 3. Clean the Xcode Project file of stale signing data
-          # Force Manual style and set the Team ID
           sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' ios/App/App.xcodeproj/project.pbxproj
           sed -i '' "s/DevelopmentTeam = \".*\";/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" ios/App/App.xcodeproj/project.pbxproj
           
-          # Remove specific profile references that cause conflicts
-          sed -i '' '/PROVISIONING_PROFILE =/d' ios/App/App.xcodeproj/project.pbxproj
-          sed -i '' '/PROVISIONING_PROFILE_SPECIFIER =/d' ios/App/App.xcodeproj/project.pbxproj
-
           # 4. Detect the Profile UUID and Profile Name
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
@@ -54,7 +49,7 @@ workflows:
           
           echo "Using Provisioning Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
 
-          # 5. NUCLEAR PATCH: Force profile into every target and configuration block
+          # 5. EXPANDED NUCLEAR PATCH: Force Manual Signing in every block
           python3 -c "
           import sys, re
           path = 'ios/App/App.xcodeproj/project.pbxproj'
@@ -65,27 +60,30 @@ workflows:
           with open(path, 'r') as f:
               content = f.read()
           
-          # 5a. Force Manual signing globally
+          # Force Manual style and identity globally across the file
           content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
           content = content.replace('CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;')
-          
-          # 5b. Force Identity for all builds
           content = re.sub(r'CODE_SIGN_IDENTITY = \".*?\";', 'CODE_SIGN_IDENTITY = \"Apple Distribution\";', content)
           content = re.sub(r'CODE_SIGN_IDENTITY\[sdk=iphoneos\*\] = \".*?\";', 'CODE_SIGN_IDENTITY[sdk=iphoneos*] = \"Apple Distribution\";', content)
           
-          # 5c. Use regex to find every buildSettings block and inject the specific profile keys
-          # We check if they already exist to avoid duplicates, otherwise append them
+          # Inject profile settings into ALL buildSettings blocks
+          # This ensures that both the 'App' target and the 'CapApp-SPM' dependencies are aligned
           pattern = r'(buildSettings = \{)'
-          replacement = r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';'
+          replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
+                         r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
+                         r'\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';' +
+                         r'\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
+                         r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";')
+          
           content = re.sub(pattern, replacement, content)
           
           with open(path, 'w') as f:
               f.write(content)
           "
           
-          echo "Nuclear patch applied to project.pbxproj."
+          echo "Expanded target patch applied to project.pbxproj."
 
-          # 6. Build with explicit signing overrides for xcodebuild
+          # 6. Build with forced manual overrides
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -98,13 +96,13 @@ workflows:
             -allowProvisioningUpdates \
             PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_STYLE="Manual" \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
+            CODE_SIGNING_ALLOWED=YES \
             CODE_SIGNING_REQUIRED=YES \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            OTHER_CODE_SIGN_FLAGS="--keychain $CM_KEYCHAIN" \
             clean archive
     publishing:
       app_store_connect:
