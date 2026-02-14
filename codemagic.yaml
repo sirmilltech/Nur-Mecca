@@ -19,20 +19,15 @@ workflows:
       - name: Capacitor Sync
         script: |
           npx cap sync ios
-          # Force resolution of Swift Packages to prevent "No signing certificate" errors in SPM
           xcodebuild -resolvePackageDependencies -project "$XCODE_PROJECT" -scheme "$XCODE_SCHEME"
+      
       - name: Build and Sign iOS App
         script: |
           # 1. Setup the API Key file
-          if [ -z "$PRIVATE_KEY" ]; then
-            echo "ERROR: PRIVATE_KEY variable is missing."
-            exit 1
-          fi
-
           mkdir -p ~/.appstoreconnect/private_keys
           echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
 
-          # 2. Use Codemagic CLI to fetch/generate everything
+          # 2. Fetch signing files
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --issuer-id "$ISSUER_ID" \
@@ -41,48 +36,55 @@ workflows:
             --create
           keychain add-certificates
           
-          # 3. Detect the Profile UUID and Profile Name
+          # 3. Detect Profile and Create ExportOptions.plist (Crucial for SPM errors)
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
           PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$PROV_PROFILE_PATH"))
           
-          echo "Using Provisioning Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
+          cat <<EOF > ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store</string>
+              <key>teamID</key>
+              <string>$DEVELOPMENT_TEAM</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>$BUNDLE_ID</key>
+                  <string>$PROV_PROFILE_NAME</string>
+              </dict>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>signingCertificate</key>
+              <string>Apple Distribution</string>
+          </dict>
+          </plist>
+          EOF
 
-          # 4. UNIVERSAL SIGNING PATCH: Force all targets (including SPM) to manual
-          # Apply a global sed replace for automatic signing strings
-          sed -i '' "s/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g" ios/App/App.xcodeproj/project.pbxproj
-          sed -i '' "s/ProvisioningStyle = Automatic/ProvisioningStyle = Manual/g" ios/App/App.xcodeproj/project.pbxproj
-
+          # 4. DEEP RECURSIVE PATCH
+          find . -name "project.pbxproj" -exec sed -i '' "s/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g" {} +
+          
           python3 -c "
-          import sys, re
-          path = 'ios/App/App.xcodeproj/project.pbxproj'
-          uuid = '$PROV_PROFILE_UUID'
-          name = '$PROV_PROFILE_NAME'
-          team = '$DEVELOPMENT_TEAM'
-          
-          with open(path, 'r') as f:
-              content = f.read()
-          
-          # Inject profile settings into ALL buildSettings blocks
-          # This specifically fixes the CapApp-SPM dependency errors
-          pattern = r'(buildSettings = \{)'
-          replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
-                         r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
-                         r'\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';' +
-                         r'\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
-                         r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
-                         r'\n\t\t\t\tSKIP_INSTALL = NO;' +
-                         r'\n\t\t\t\tBUILD_LIBRARIES_FOR_DISTRIBUTION = YES;')
-          
-          content = re.sub(pattern, replacement, content)
-          
-          with open(path, 'w') as f:
-              f.write(content)
+          import sys, re, os
+          uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
+          for root, dirs, files in os.walk('.'):
+              for file in files:
+                  if file == 'project.pbxproj':
+                      path = os.path.join(root, file)
+                      with open(path, 'r') as f: content = f.read()
+                      pattern = r'(buildSettings = \{)'
+                      replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
+                                     r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
+                                     r'\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';' +
+                                     r'\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
+                                     r'\n\t\t\t\tSKIP_INSTALL = NO;' +
+                                     r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";')
+                      with open(path, 'w') as f: f.write(re.sub(pattern, replacement, content))
           "
-          
-          echo "Full-spectrum target patch applied. Starting xcodebuild..."
 
-          # 5. Build with explicit resolution and forced manual overrides
+          # 5. Execute Build
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -92,20 +94,27 @@ workflows:
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
+            -exportOptionsPlist ExportOptions.plist \
             -allowProvisioningUpdates \
             PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             CODE_SIGN_STYLE="Manual" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
-            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
-            CODE_SIGNING_ALLOWED=YES \
-            CODE_SIGNING_REQUIRED=YES \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            COMPILER_INDEX_STORE_ENABLE=NO \
             SKIP_INSTALL=NO \
-            BUILD_LIBRARIES_FOR_DISTRIBUTION=YES \
             clean archive
+
+      - name: Sync Back to Repository
+        script: |
+          git config --global user.email "builder@codemagic.io"
+          git config --global user.name "Codemagic Builder"
+          git add codemagic.yaml
+          git add ios/App/App.xcodeproj/project.pbxproj
+          if [ -n "$(git status --porcelain)" ]; then
+            git commit -m "fix: resolve SPM dependencies and force SKIP_INSTALL=NO for signing"
+            git push origin HEAD:main
+          else
+            echo "No changes to sync."
+          fi
+
     publishing:
       app_store_connect:
         auth: integration
