@@ -38,16 +38,17 @@ workflows:
             --create
           keychain add-certificates
           
-          # 3. Force the Project to use the Team ID (Fix for Status 65)
-          # This replaces any placeholder Team ID in the Xcode project with your actual ID
+          # 3. Hard-disable Automatic Signing in the project file
+          # This forces Xcode to look ONLY at our manual parameters
+          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' ios/App/App.xcodeproj/project.pbxproj
           sed -i '' "s/DevelopmentTeam = \".*\";/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" ios/App/App.xcodeproj/project.pbxproj
 
-          # 4. Detect the Profile UUID
+          # 4. Detect the Profile UUID and Name
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
           echo "Using Provisioning Profile UUID: $PROV_PROFILE_UUID"
 
-          # 5. Build with explicit signing parameters
+          # 5. Build with absolute signing overrides
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -62,6 +63,7 @@ workflows:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
+            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             clean archive
     publishing:
       app_store_connect:
