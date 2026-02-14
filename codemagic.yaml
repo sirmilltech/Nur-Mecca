@@ -65,7 +65,8 @@ workflows:
           </plist>
           EOF
 
-          # 4. DEEP PROJECT PATCHING
+          # 4. RECURSIVE MULTI-TARGET PATCHING
+          # Force Manual signing at the top level
           find . -name "project.pbxproj" -exec sed -i '' "s/ProvisioningStyle = Automatic/ProvisioningStyle = Manual/g" {} +
           find . -name "project.pbxproj" -exec sed -i '' "s/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g" {} +
           
@@ -77,8 +78,15 @@ workflows:
                   if file == 'project.pbxproj':
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
-                      content = re.sub(r'PROVISIONING_PROFILE = \"[^\"]*\";', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
-                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = \"[^\"]*\";', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
+                      
+                      # Force match the Team ID globally
+                      content = re.sub(r'DevelopmentTeam = [A-Z0-9]+;', f'DevelopmentTeam = {team};', content)
+                      
+                      # Wipe any existing profile locks
+                      content = re.sub(r'PROVISIONING_PROFILE = \"[^\"]*\";', '', content)
+                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = \"[^\"]*\";', '', content)
+                      
+                      # Inject the new profile into every single build configuration block
                       pattern = r'(buildSettings = \{)'
                       replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
                                      r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
@@ -87,12 +95,11 @@ workflows:
                                      r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
                                      r'\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
                       content = re.sub(pattern, replacement, content)
-                      content = re.sub(r'DevelopmentTeam = [A-Z0-9]+;', f'DevelopmentTeam = {team};', content)
-                      content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
+                      
                       with open(path, 'w') as f: f.write(content)
           "
 
-          # 5. Execute ARCHIVE (Corrected flags)
+          # 5. Execute ARCHIVE with explicit overrides
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -103,9 +110,12 @@ workflows:
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
             -allowProvisioningUpdates \
+            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             clean archive
 
-          # 6. Execute EXPORT (Fixed Typo: -exportPath)
+          # 6. Execute EXPORT
           xcodebuild \
             -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
@@ -122,7 +132,7 @@ workflows:
           git add codemagic.yaml
           git add ios/App/App.xcodeproj/project.pbxproj
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: command flags and deep pbxproj patching"
+            git commit -m "fix: global target signing patch for App and sub-dependencies"
             git push origin HEAD:main
           else
             echo "No changes to sync."
