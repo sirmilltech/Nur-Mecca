@@ -20,37 +20,27 @@ workflows:
         script: npx cap sync ios
       - name: Build and Sign iOS App
         script: |
-          # 1. Decode Key inside the same script block to ensure persistence
+          # 1. Setup the API Key file
           if [ -z "$PRIVATE_KEY" ]; then
             echo "ERROR: PRIVATE_KEY variable is missing."
             exit 1
           fi
 
-          python3 <<'EOF'
-          import os, base64
-          data = os.environ.get('PRIVATE_KEY', '').strip()
-          try:
-              decoded = base64.b64decode("".join(data.split()))
-              with open('/Users/builder/key.p8', 'wb') as f:
-                  f.write(decoded)
-              print("SUCCESS: Key written to /Users/builder/key.p8")
-          except Exception as e:
-              print(f"Decode Failed: {e}")
-              exit(1)
-          EOF
+          # Save key to a reliable local directory
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
 
-          chmod 600 /Users/builder/key.p8
-          
-          # 2. Setup Keychain & Profiles
+          # 2. Use Codemagic CLI to fetch/generate everything automatically
+          # This handles certificates, keys, and profiles in one command
           keychain initialize
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --issuer-id "$ISSUER_ID" \
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --type IOS_APP_STORE \
+            --create
           keychain add-certificates
           
-          # 3. Extract Profile UUID
-          PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
-          PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
-
-          # 4. Build with Explicit Path
+          # 3. Build using the profiles fetched in step 2
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -58,12 +48,9 @@ workflows:
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            -authenticationKeyIssuerID "${ISSUER_ID}" \
-            -authenticationKeyPath "/Users/builder/key.p8" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
+            -allowProvisioningUpdates \
             clean archive
     publishing:
       app_store_connect:
