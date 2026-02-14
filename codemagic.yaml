@@ -23,11 +23,11 @@ workflows:
       
       - name: Build and Sign iOS App
         script: |
-          # 1. Setup the API Key file
+          # 1. Setup API Key
           mkdir -p ~/.appstoreconnect/private_keys
           echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
 
-          # 2. Fetch and Import Signing Files
+          # 2. Fetch Signing Files
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --issuer-id "$ISSUER_ID" \
@@ -65,8 +65,8 @@ workflows:
           </plist>
           EOF
 
-          # 4. AGGRESSIVE PROJECT PATCHING
-          # Force Manual style globally
+          # 4. SURGICAL PROJECT PATCHING
+          # Remove Automatic signing references
           find . -name "project.pbxproj" -exec sed -i '' "s/ProvisioningStyle = Automatic/ProvisioningStyle = Manual/g" {} +
           find . -name "project.pbxproj" -exec sed -i '' "s/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g" {} +
           
@@ -78,6 +78,7 @@ workflows:
                   if file == 'project.pbxproj':
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
+                      # Inject into every buildSettings block
                       pattern = r'(buildSettings = \{)'
                       replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
                                      r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
@@ -85,10 +86,13 @@ workflows:
                                      r'\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
                                      r'\n\t\t\t\tSKIP_INSTALL = NO;' +
                                      r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";')
-                      with open(path, 'w') as f: f.write(re.sub(pattern, replacement, content))
+                      new_content = re.sub(pattern, replacement, content)
+                      # Ensure ProvisioningStyle is also set to Manual in the Target attributes
+                      new_content = new_content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
+                      with open(path, 'w') as f: f.write(new_content)
           "
 
-          # 5. Execute ARCHIVE with explicit Profile mapping
+          # 5. Execute ARCHIVE
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -101,9 +105,7 @@ workflows:
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            CODE_SIGN_STYLE="Manual" \
             CODE_SIGN_IDENTITY="Apple Distribution" \
-            SKIP_INSTALL=NO \
             clean archive
 
           # 6. Execute EXPORT
@@ -123,7 +125,7 @@ workflows:
           git add codemagic.yaml
           git add ios/App/App.xcodeproj/project.pbxproj
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: force manual signing and explicit profile mapping"
+            git commit -m "fix: hard-code provisioning profile in pbxproj buildSettings"
             git push origin HEAD:main
           else
             echo "No changes to sync."
