@@ -48,7 +48,11 @@ workflows:
           
           echo "Using Provisioning Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
 
-          # 4. SUPER NUCLEAR PATCH: Apply to project.pbxproj and force identity
+          # 4. UNIVERSAL SIGNING PATCH: Force all targets (including SPM) to manual
+          # Apply a global sed replace for automatic signing strings
+          sed -i '' "s/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g" ios/App/App.xcodeproj/project.pbxproj
+          sed -i '' "s/ProvisioningStyle = Automatic/ProvisioningStyle = Manual/g" ios/App/App.xcodeproj/project.pbxproj
+
           python3 -c "
           import sys, re
           path = 'ios/App/App.xcodeproj/project.pbxproj'
@@ -59,22 +63,16 @@ workflows:
           with open(path, 'r') as f:
               content = f.read()
           
-          # Force Manual style and identity globally across the file
-          content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
-          content = content.replace('CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;')
-          
-          # Set specific Distribution identity
-          content = re.sub(r'CODE_SIGN_IDENTITY = \".*?\";', 'CODE_SIGN_IDENTITY = \"Apple Distribution\";', content)
-          content = re.sub(r'CODE_SIGN_IDENTITY\[sdk=iphoneos\*\] = \".*?\";', 'CODE_SIGN_IDENTITY[sdk=iphoneos*] = \"Apple Distribution\";', content)
-          
-          # Inject profile settings into ALL buildSettings blocks (including SPM and Sub-targets)
+          # Inject profile settings into ALL buildSettings blocks
+          # This specifically fixes the CapApp-SPM dependency errors
           pattern = r'(buildSettings = \{)'
           replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
                          r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
                          r'\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';' +
                          r'\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
                          r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
-                         r'\n\t\t\t\tSKIP_INSTALL = NO;')
+                         r'\n\t\t\t\tSKIP_INSTALL = NO;' +
+                         r'\n\t\t\t\tBUILD_LIBRARIES_FOR_DISTRIBUTION = YES;')
           
           content = re.sub(pattern, replacement, content)
           
@@ -82,7 +80,7 @@ workflows:
               f.write(content)
           "
           
-          echo "Full-spectrum target patch applied."
+          echo "Full-spectrum target patch applied. Starting xcodebuild..."
 
           # 5. Build with explicit resolution and forced manual overrides
           xcodebuild \
@@ -104,7 +102,9 @@ workflows:
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGNING_REQUIRED=YES \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             SKIP_INSTALL=NO \
+            BUILD_LIBRARIES_FOR_DISTRIBUTION=YES \
             clean archive
     publishing:
       app_store_connect:
