@@ -65,11 +65,7 @@ workflows:
           </plist>
           EOF
 
-          # 4. RECURSIVE MULTI-TARGET PATCHING
-          # Force Manual signing at the top level
-          find . -name "project.pbxproj" -exec sed -i '' "s/ProvisioningStyle = Automatic/ProvisioningStyle = Manual/g" {} +
-          find . -name "project.pbxproj" -exec sed -i '' "s/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g" {} +
-          
+          # 4. DEEP TARGET ATTRIBUTES FORCING
           python3 -c "
           import sys, re, os
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
@@ -79,14 +75,17 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # Force match the Team ID globally
+                      # Step A: Force global DevelopmentTeam
                       content = re.sub(r'DevelopmentTeam = [A-Z0-9]+;', f'DevelopmentTeam = {team};', content)
                       
-                      # Wipe any existing profile locks
+                      # Step B: Patch TargetAttributes (Critical for fixing 'Select a provisioning profile' error)
+                      # This ensures the UI-level setting in Xcode is switched to Manual
+                      content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
+                      
+                      # Step C: Wipe and Re-inject buildSettings
                       content = re.sub(r'PROVISIONING_PROFILE = \"[^\"]*\";', '', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = \"[^\"]*\";', '', content)
                       
-                      # Inject the new profile into every single build configuration block
                       pattern = r'(buildSettings = \{)'
                       replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
                                      r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
@@ -99,7 +98,7 @@ workflows:
                       with open(path, 'w') as f: f.write(content)
           "
 
-          # 5. Execute ARCHIVE with explicit overrides
+          # 5. Execute ARCHIVE (Explicit mapping to bypass target graph issues)
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -110,7 +109,7 @@ workflows:
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
             -allowProvisioningUpdates \
-            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
+            CODE_SIGN_STYLE="Manual" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             clean archive
@@ -132,7 +131,7 @@ workflows:
           git add codemagic.yaml
           git add ios/App/App.xcodeproj/project.pbxproj
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: global target signing patch for App and sub-dependencies"
+            git commit -m "fix: explicit target attributes manual signing override"
             git push origin HEAD:main
           else
             echo "No changes to sync."
