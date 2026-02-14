@@ -66,7 +66,7 @@ workflows:
           </plist>
           EOF
 
-          # 5. ATOMIC PROJECT OVERWRITE (TargetAttributes & BuildSettings)
+          # 5. EXPANDED PROJECT PATCH (Forcing Manual Signing & Target Attributes)
           python3 -c "
           import sys, re, os
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
@@ -77,31 +77,34 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
 
-                      # 1. Force ProvisioningStyle to Manual for the whole project
+                      # 1. Kill 'Automatic' signing everywhere
                       content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
                       
-                      # 2. Inject Profile Info into TargetAttributes block
-                      # This solves the 'Select a provisioning profile' error in the UI
-                      attr_patch = f'ProvisioningStyle = Manual;\n\t\t\t\t\tProvisioningProfile = \"{uuid}\";\n\t\t\t\t\tProvisioningProfileSpecifier = \"{name}\";'
-                      content = content.replace('ProvisioningStyle = Manual;', attr_patch)
+                      # 2. Inject Provisioning into TargetAttributes (Critical for Xcode 16+)
+                      # We search for the TargetAttributes block and ensure our target has the profile assigned
+                      if 'TargetAttributes' in content:
+                          # This pattern looks for target sections within TargetAttributes and injects/updates the profile
+                          content = re.sub(r'(ProvisioningStyle = Manual;)', 
+                                         f'ProvisioningStyle = Manual;\n\t\t\t\t\tProvisioningProfile = \"{uuid}\";\n\t\t\t\t\tProvisioningProfileSpecifier = \"{name}\";', 
+                                         content)
 
-                      # 3. Clean and Hard-set Build Settings
+                      # 3. Scrub existing signing keys and re-inject hard values
                       for key in ['PROVISIONING_PROFILE', 'PROVISIONING_PROFILE_SPECIFIER', 'CODE_SIGN_STYLE', 'DEVELOPMENT_TEAM']:
                           content = re.sub(f'{key} = [^;]+;', '', content)
                       
                       settings = (f'\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";' +
-                                 f'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";' +
-                                 f'\n\t\t\t\tDEVELOPMENT_TEAM = {team};' +
-                                 '\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
-                                 '\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
-                                 '\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
+                                  f'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";' +
+                                  f'\n\t\t\t\tDEVELOPMENT_TEAM = {team};' +
+                                  '\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
+                                  '\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
+                                  '\n\t\t\t\t\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"Apple Distribution\";')
                       
                       content = re.sub(r'(buildSettings = \{)', r'\1' + settings, content)
 
                       with open(path, 'w') as f: f.write(content)
           "
 
-          # 6. ARCHIVE - Adding UseModernBuildSystem=NO as a fallback if needed
+          # 6. ARCHIVE
           mkdir -p build/ios/xcarchive
           xcodebuild \
             -project "$XCODE_PROJECT" \
@@ -123,9 +126,8 @@ workflows:
 
           # 7. EXPORT
           if [ ! -d "build/ios/xcarchive/App.xcarchive" ]; then
-             echo "ERROR: Archive failed. Reviewing logs..."
-             tail -n 100 xcodebuild_archive.log
-             exit 1
+              echo "ERROR: Archive failed."
+              exit 1
           fi
 
           xcodebuild \
@@ -143,15 +145,12 @@ workflows:
           git config --global user.name "Codemagic Builder"
           find . -name "project.pbxproj" -exec git add {} +
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: total manual signing override for Xcode 26.2"
+            git commit -m "fix: explicit target profile assignment for Xcode 16"
             git push origin HEAD:main
           else
             echo "No changes to sync."
           fi
 
-    publishing:
-      app_store_connect:
-        auth: integration
     artifacts:
       - build/ios/xcarchive/*.xcarchive
       - build/ios/ipa/*.ipa
