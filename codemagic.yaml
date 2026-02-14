@@ -75,14 +75,11 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # Step A: Force global DevelopmentTeam
+                      # Step A: Force global DevelopmentTeam & Provisioning Style
                       content = re.sub(r'DevelopmentTeam = [A-Z0-9]+;', f'DevelopmentTeam = {team};', content)
-                      
-                      # Step B: Patch TargetAttributes (Critical for fixing 'Select a provisioning profile' error)
-                      # This ensures the UI-level setting in Xcode is switched to Manual
                       content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
                       
-                      # Step C: Wipe and Re-inject buildSettings
+                      # Step B: Wipe and Re-inject buildSettings with strict quotes
                       content = re.sub(r'PROVISIONING_PROFILE = \"[^\"]*\";', '', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = \"[^\"]*\";', '', content)
                       
@@ -98,7 +95,7 @@ workflows:
                       with open(path, 'w') as f: f.write(content)
           "
 
-          # 5. Execute ARCHIVE (Explicit mapping to bypass target graph issues)
+          # 5. Execute ARCHIVE (Using absolute variable overrides to force target compliance)
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -109,9 +106,11 @@ workflows:
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
             -allowProvisioningUpdates \
-            CODE_SIGN_STYLE="Manual" \
+            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_STYLE="Manual" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             clean archive
 
           # 6. Execute EXPORT
@@ -131,7 +130,7 @@ workflows:
           git add codemagic.yaml
           git add ios/App/App.xcodeproj/project.pbxproj
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: explicit target attributes manual signing override"
+            git commit -m "fix: global session override for manual signing"
             git push origin HEAD:main
           else
             echo "No changes to sync."
