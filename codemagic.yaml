@@ -17,7 +17,10 @@ workflows:
       - name: Install dependencies
         script: npm install
       - name: Capacitor Sync
-        script: npx cap sync ios
+        script: |
+          npx cap sync ios
+          # Force resolution of Swift Packages to prevent "No signing certificate" errors in SPM
+          xcodebuild -resolvePackageDependencies -project "$XCODE_PROJECT" -scheme "$XCODE_SCHEME"
       - name: Build and Sign iOS App
         script: |
           # 1. Setup the API Key file
@@ -38,18 +41,14 @@ workflows:
             --create
           keychain add-certificates
           
-          # 3. Clean the Xcode Project file of stale signing data
-          sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' ios/App/App.xcodeproj/project.pbxproj
-          sed -i '' "s/DevelopmentTeam = \".*\";/DevelopmentTeam = $DEVELOPMENT_TEAM;/g" ios/App/App.xcodeproj/project.pbxproj
-          
-          # 4. Detect the Profile UUID and Profile Name
+          # 3. Detect the Profile UUID and Profile Name
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
           PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
           PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$PROV_PROFILE_PATH"))
           
           echo "Using Provisioning Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
 
-          # 5. EXPANDED NUCLEAR PATCH: Force Manual Signing in every block
+          # 4. SUPER NUCLEAR PATCH: Apply to project.pbxproj and force identity
           python3 -c "
           import sys, re
           path = 'ios/App/App.xcodeproj/project.pbxproj'
@@ -63,17 +62,19 @@ workflows:
           # Force Manual style and identity globally across the file
           content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
           content = content.replace('CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;')
+          
+          # Set specific Distribution identity
           content = re.sub(r'CODE_SIGN_IDENTITY = \".*?\";', 'CODE_SIGN_IDENTITY = \"Apple Distribution\";', content)
           content = re.sub(r'CODE_SIGN_IDENTITY\[sdk=iphoneos\*\] = \".*?\";', 'CODE_SIGN_IDENTITY[sdk=iphoneos*] = \"Apple Distribution\";', content)
           
-          # Inject profile settings into ALL buildSettings blocks
-          # This ensures that both the 'App' target and the 'CapApp-SPM' dependencies are aligned
+          # Inject profile settings into ALL buildSettings blocks (including SPM and Sub-targets)
           pattern = r'(buildSettings = \{)'
           replacement = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
                          r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
                          r'\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';' +
                          r'\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
-                         r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";')
+                         r'\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";' +
+                         r'\n\t\t\t\tSKIP_INSTALL = NO;')
           
           content = re.sub(pattern, replacement, content)
           
@@ -81,9 +82,9 @@ workflows:
               f.write(content)
           "
           
-          echo "Expanded target patch applied to project.pbxproj."
+          echo "Full-spectrum target patch applied."
 
-          # 6. Build with forced manual overrides
+          # 5. Build with explicit resolution and forced manual overrides
           xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme "$XCODE_SCHEME" \
@@ -103,6 +104,7 @@ workflows:
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGNING_REQUIRED=YES \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            SKIP_INSTALL=NO \
             clean archive
     publishing:
       app_store_connect:
