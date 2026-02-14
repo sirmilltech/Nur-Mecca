@@ -54,11 +54,24 @@ workflows:
           
           echo "Using Provisioning Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
 
-          # 5. Injection Expansion: Hard-code the detected IDs into the project file
-          # This ensures the build target cannot ignore the provisioning profile
+          # 5. EXPANDED INJECTION: Force profile into every build configuration
+          # This ensures the 'App' target cannot complain about missing profiles
           sed -i '' "s/CODE_SIGN_IDENTITY = \".*\";/CODE_SIGN_IDENTITY = \"Apple Distribution\";/g" ios/App/App.xcodeproj/project.pbxproj
           
-          # Inject the specific profile and specifier into the build settings
+          # Use a block-level injection to ensure PROVISIONING_PROFILE exists for all Release builds
+          python3 -c "
+          import sys
+          path = 'ios/App/App.xcodeproj/project.pbxproj'
+          with open(path, 'r') as f:
+              content = f.read()
+          # Force the specific UUID and Name into the file content
+          new_content = content.replace('CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;')
+          # This ensures that even if xcodebuild flags fail, the file itself is correct
+          with open(path, 'w') as f:
+              f.write(new_content)
+          "
+          
+          # Final sed injection for the specific UUID
           sed -i '' "/CODE_SIGN_IDENTITY = \"Apple Distribution\";/a \\
           PROVISIONING_PROFILE = \"$PROV_PROFILE_UUID\";\\
           PROVISIONING_PROFILE_SPECIFIER = \"$PROV_PROFILE_NAME\";" ios/App/App.xcodeproj/project.pbxproj
