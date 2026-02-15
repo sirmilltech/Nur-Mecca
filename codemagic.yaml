@@ -35,11 +35,29 @@ workflows:
             --type IOS_APP_STORE \
             --create
           keychain add-certificates
+
+          # 2.a Ensure provisioning profile was downloaded and visible
+          echo "Checking for downloaded provisioning profiles..."
+          ls -la ~/.appstoreconnect || true
+          ls -la ~/Library/MobileDevice/Provisioning\ Profiles || true
+          PROV_PROFILE_PATH=$(ls ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision 2>/dev/null | head -n 1 || true)
+          if [ -z "$PROV_PROFILE_PATH" ]; then
+            echo "ERROR: No provisioning profile found in ~/Library/MobileDevice/Provisioning Profiles"
+            echo "Contents of ~/.appstoreconnect:"
+            ls -la ~/.appstoreconnect || true
+            echo "Please confirm App Store Connect key, issuer ID, and that the Codemagic integration can fetch provisioning profiles."
+            exit 1
+          fi
           
           # 3. Detect Profile
-          PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
-          PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
-          PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$PROV_PROFILE_PATH"))
+          # PROV_PROFILE_PATH is already set above; parse UUID and Name robustly
+          PROV_PROFILE_UUID=$(security cms -D -i "$PROV_PROFILE_PATH" | /usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin 2>/dev/null || grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
+          PROV_PROFILE_NAME=$(security cms -D -i "$PROV_PROFILE_PATH" | /usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin 2>/dev/null || true)
+
+          if [ -z "$PROV_PROFILE_UUID" ] || [ -z "$PROV_PROFILE_NAME" ]; then
+            echo "WARNING: Could not extract UUID/Name from provisioning profile; dumping parsed plist for inspection"
+            security cms -D -i "$PROV_PROFILE_PATH" || true
+          fi
           
           echo "Using Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
 
