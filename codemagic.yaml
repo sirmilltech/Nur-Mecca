@@ -23,25 +23,51 @@ workflows:
       
       - name: Build and Sign iOS App
         script: |
-          # 1. Setup API Key
-          mkdir -p ~/.appstoreconnect/private_keys
-          echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
+          # 1. DEBUG: Check if manual fallback is being used
+          if [ -n "$MANUAL_P12_BASE64" ]; then
+            echo "INFO: MANUAL_P12_BASE64 is set - will use manual certificate/profile fallback"
+          else
+            echo "INFO: MANUAL_P12_BASE64 is NOT set - attempting App Store Connect API"
+          fi
 
-          # 2. Fetch Signing Files (with logging and manual fallback)
+          if [ -z "$PRIVATE_KEY" ]; then
+            echo "WARNING: PRIVATE_KEY is empty. Add it to Codemagic env vars under 'apple_auth' group, or use MANUAL_P12_BASE64."
+          fi
+
+          # 2. Setup API Key (only if PRIVATE_KEY is provided)
+          if [ -n "$PRIVATE_KEY" ]; then
+            mkdir -p ~/.appstoreconnect/private_keys
+            echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
+            
+            # Verify key file was created
+            if [ ! -f ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 ]; then
+              echo "ERROR: Failed to create API key file"
+              exit 1
+            fi
+            KEYFILE_SIZE=$(stat -f%z ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 || echo "0")
+            echo "API Key file created: $KEYFILE_SIZE bytes"
+          fi
+
+          # 3. Fetch Signing Files (with logging and manual fallback)
           keychain initialize
 
           ASC_LOG="$PWD/asc_fetch.log"
           set -o pipefail
-          echo "Running app-store-connect fetch-signing-files (logging to $ASC_LOG)"
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --issuer-id "$ISSUER_ID" \
-            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --type IOS_APP_STORE \
-            --create > "$ASC_LOG" 2>&1 || true
-          ASC_EXIT=$?
-          echo "app-store-connect exit code: $ASC_EXIT"
-          echo "---- app-store-connect output ----"
-          sed -n '1,200p' "$ASC_LOG" || true
+          
+          if [ -n "$PRIVATE_KEY" ]; then
+            echo "Running app-store-connect fetch-signing-files (logging to $ASC_LOG)"
+            app-store-connect fetch-signing-files "$BUNDLE_ID" \
+              --issuer-id "$ISSUER_ID" \
+              --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+              --type IOS_APP_STORE \
+              --create > "$ASC_LOG" 2>&1 || true
+            ASC_EXIT=$?
+            echo "app-store-connect exit code: $ASC_EXIT"
+            echo "---- app-store-connect output ----"
+            sed -n '1,200p' "$ASC_LOG" || true
+          else
+            echo "Skipping app-store-connect (PRIVATE_KEY not set)"
+          fi
 
           # Add any discovered certificates (if fetch worked)
           keychain add-certificates || true
@@ -77,11 +103,33 @@ workflows:
           ls -la ~/Library/Developer/Xcode/UserData/Certificates 2>/dev/null || true
           ls -la ~/Library/MobileDevice/Provisioning\ Profiles 2>/dev/null || true
           
-          # 3. Detect Profile (with fallback)
+          # 4. Detect Profile (with fallback)
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" 2>/dev/null | head -n 1 || true)
           
           if [ -z "$PROV_PROFILE_PATH" ]; then
-            echo "ERROR: No provisioning profile found. Check app-store-connect output ($ASC_LOG) or provide MANUAL_PROFILE_BASE64."
+            echo ""
+            echo "=========================================="
+            echo "ERROR: No provisioning profile found."
+            echo "=========================================="
+            echo ""
+            echo "To fix, add one of the following to Codemagic environment variables:"
+            echo ""
+            echo "OPTION A: Use App Store Connect API (recommended)"
+            echo "  1. Ensure PRIVATE_KEY, ISSUER_ID, and APP_STORE_CONNECT_KEY_IDENTIFIER are set"
+            echo "  2. Create/register a provisioning profile in App Store Connect"
+            echo "  3. Re-run the build"
+            echo ""
+            echo "OPTION B: Manual Certificate + Profile Upload"
+            echo "  1. Set MANUAL_P12_BASE64 = (base64-encoded .p12 certificate file)"
+            echo "  2. Set MANUAL_P12_PASSWORD = (password for .p12, if any)"
+            echo "  3. Set MANUAL_PROFILE_BASE64 = (base64-encoded .mobileprovision file)"
+            echo "  4. Re-run the build"
+            echo ""
+            echo "Debug info:"
+            echo "  - app-store-connect log: $ASC_LOG"
+            echo "  - PRIVATE_KEY set: $([ -n "$PRIVATE_KEY" ] && echo "YES" || echo "NO")"
+            echo "  - MANUAL_P12_BASE64 set: $([ -n "$MANUAL_P12_BASE64" ] && echo "YES" || echo "NO")"
+            echo "  - MANUAL_PROFILE_BASE64 set: $([ -n "$MANUAL_PROFILE_BASE64" ] && echo "YES" || echo "NO")"
             exit 1
           fi
           
