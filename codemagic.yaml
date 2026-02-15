@@ -27,21 +27,75 @@ workflows:
           mkdir -p ~/.appstoreconnect/private_keys
           echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
 
-          # 2. Fetch Signing Files
+          # 2. Fetch Signing Files (with logging and manual fallback)
           keychain initialize
+
+          ASC_LOG="$PWD/asc_fetch.log"
+          set -o pipefail
+          echo "Running app-store-connect fetch-signing-files (logging to $ASC_LOG)"
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --issuer-id "$ISSUER_ID" \
             --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             --type IOS_APP_STORE \
-            --create
-          keychain add-certificates
+            --create > "$ASC_LOG" 2>&1 || true
+          ASC_EXIT=$?
+          echo "app-store-connect exit code: $ASC_EXIT"
+          echo "---- app-store-connect output ----"
+          sed -n '1,200p' "$ASC_LOG" || true
+
+          # Add any discovered certificates (if fetch worked)
+          keychain add-certificates || true
+
+          # Inspect downloaded artifacts
+          echo "Checking for certificates and provisioning profiles after fetch..."
+          ls -la ~/Library/Developer/Xcode/UserData/Certificates 2>/dev/null || true
+          ls -la ~/Library/MobileDevice/Provisioning\ Profiles 2>/dev/null || true
+
+          # Fallback: if no certs/profiles were fetched, allow manual upload via CI env vars
+          CERT_COUNT=$(ls ~/Library/Developer/Xcode/UserData/Certificates/*.p12 2>/dev/null | wc -l || true)
+          PROFILE_COUNT=$(ls ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision 2>/dev/null | wc -l || true)
+
+          if [ "$CERT_COUNT" -eq 0 ] && [ -n "$MANUAL_P12_BASE64" ]; then
+            echo "No .p12 certificates found; decoding MANUAL_P12_BASE64 into ~/Library/Developer/Xcode/UserData/Certificates/manual.p12"
+            mkdir -p ~/Library/Developer/Xcode/UserData/Certificates
+            echo "$MANUAL_P12_BASE64" | base64 --decode > ~/Library/Developer/Xcode/UserData/Certificates/manual.p12
+            if [ -n "$MANUAL_P12_PASSWORD" ]; then
+              security import ~/Library/Developer/Xcode/UserData/Certificates/manual.p12 -P "$MANUAL_P12_PASSWORD" -A || true
+            else
+              security import ~/Library/Developer/Xcode/UserData/Certificates/manual.p12 -A || true
+            fi
+          fi
+
+          if [ "$PROFILE_COUNT" -eq 0 ] && [ -n "$MANUAL_PROFILE_BASE64" ]; then
+            echo "No provisioning profiles found; decoding MANUAL_PROFILE_BASE64 into ~/Library/MobileDevice/Provisioning Profiles/manual.mobileprovision"
+            mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+            echo "$MANUAL_PROFILE_BASE64" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/manual.mobileprovision
+          fi
+
+          # Re-list to show results
+          echo "Post-fallback inspection:"
+          ls -la ~/Library/Developer/Xcode/UserData/Certificates 2>/dev/null || true
+          ls -la ~/Library/MobileDevice/Provisioning\ Profiles 2>/dev/null || true
           
-          # 3. Detect Profile
-          PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
-          PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1)
-          PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$PROV_PROFILE_PATH"))
+          # 3. Detect Profile (with fallback)
+          PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" 2>/dev/null | head -n 1 || true)
+          
+          if [ -z "$PROV_PROFILE_PATH" ]; then
+            echo "ERROR: No provisioning profile found. Check app-store-connect output ($ASC_LOG) or provide MANUAL_PROFILE_BASE64."
+            exit 1
+          fi
+          
+          # Parse UUID and Name safely
+          PROV_PROFILE_UUID=$(security cms -D -i "$PROV_PROFILE_PATH" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin 2>/dev/null || echo "")
+          if [ -z "$PROV_PROFILE_UUID" ]; then
+            echo "WARNING: Could not parse UUID from provisioning profile; trying grep fallback"
+            PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1 || echo "")
+          fi
+          
+          PROV_PROFILE_NAME=$(security cms -D -i "$PROV_PROFILE_PATH" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin 2>/dev/null || echo "")
           
           echo "Using Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
+          echo "Profile path: $PROV_PROFILE_PATH"
 
           # 4. Create ExportOptions.plist
           cat <<EOF > ExportOptions.plist
