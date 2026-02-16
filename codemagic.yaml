@@ -164,15 +164,21 @@ workflows:
             exit 1
           fi
           
-          # Parse UUID and Name safely
-          PROV_PROFILE_UUID=$(security cms -D -i "$PROV_PROFILE_PATH" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin 2>/dev/null || echo "")
+          # Parse UUID and Name safely by writing the decoded plist to a temp file
+          TMP_PLIST=$(mktemp /tmp/provplist.XXXXXX.plist)
+          security cms -D -i "$PROV_PROFILE_PATH" > "$TMP_PLIST" 2>/dev/null || true
+
+          PROV_PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$TMP_PLIST" 2>/dev/null || echo "")
           if [ -z "$PROV_PROFILE_UUID" ]; then
             echo "WARNING: Could not parse UUID from provisioning profile; trying grep fallback"
             PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1 || echo "")
           fi
-          
-          PROV_PROFILE_NAME=$(security cms -D -i "$PROV_PROFILE_PATH" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin 2>/dev/null || echo "")
-          
+
+          PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$TMP_PLIST" 2>/dev/null || echo "")
+
+          # Cleanup temp plist
+          rm -f "$TMP_PLIST" || true
+
           echo "Using Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
           echo "Profile path: $PROV_PROFILE_PATH"
 
