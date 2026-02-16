@@ -143,6 +143,9 @@ workflows:
             echo "ERROR: No provisioning profile found."
             echo "=========================================="
             echo ""
+            echo "Debug: Listing provisioning profile directory contents:"
+            ls -la ~/Library/MobileDevice/Provisioning\ Profiles 2>/dev/null || echo "Directory does not exist"
+            echo ""
             echo "To fix, add one of the following to Codemagic environment variables:"
             echo ""
             echo "OPTION A: Use App Store Connect API (recommended)"
@@ -164,6 +167,8 @@ workflows:
             exit 1
           fi
           
+          echo "Found provisioning profile: $PROV_PROFILE_PATH"
+          
           # Parse UUID and Name safely by writing the decoded plist to a temp file
           TMP_PLIST=$(mktemp /tmp/provplist.XXXXXX.plist)
           security cms -D -i "$PROV_PROFILE_PATH" > "$TMP_PLIST" 2>/dev/null || true
@@ -178,6 +183,12 @@ workflows:
 
           # Cleanup temp plist
           rm -f "$TMP_PLIST" || true
+
+          if [ -z "$PROV_PROFILE_UUID" ] || [ -z "$PROV_PROFILE_NAME" ]; then
+            echo "ERROR: Could not parse UUID or Name from provisioning profile"
+            echo "Profile path: $PROV_PROFILE_PATH"
+            exit 1
+          fi
 
           echo "Using Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
           echo "Profile path: $PROV_PROFILE_PATH"
