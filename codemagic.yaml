@@ -34,7 +34,6 @@ workflows:
             echo "WARNING: PRIVATE_KEY is empty. Add it to Codemagic env vars under 'apple_auth' group, or use MANUAL_P12_BASE64."
           fi
 
-          # 2. Setup API Key (only if PRIVATE_KEY is provided)
           if [ -n "$PRIVATE_KEY" ]; then
             mkdir -p ~/.appstoreconnect/private_keys
             echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
@@ -46,6 +45,15 @@ workflows:
             fi
             KEYFILE_SIZE=$(stat -f%z ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 || echo "0")
             echo "API Key file created: $KEYFILE_SIZE bytes"
+            
+            # DEBUG: Print ISSUER_ID (obfuscated for security)
+            if [ -z "$ISSUER_ID" ]; then
+              echo "ERROR: ISSUER_ID is NOT set in Codemagic environment!"
+              echo "Add ISSUER_ID to the 'apple_auth' group in Codemagic settings."
+              exit 1
+            fi
+            ISSUER_OBFUSCATED="${ISSUER_ID:0:4}****${ISSUER_ID: -4}"
+            echo "ISSUER_ID set: $ISSUER_OBFUSCATED"
           fi
 
           # 3. Fetch Signing Files (with logging and manual fallback)
@@ -65,6 +73,29 @@ workflows:
             echo "app-store-connect exit code: $ASC_EXIT"
             echo "---- app-store-connect output ----"
             sed -n '1,200p' "$ASC_LOG" || true
+            
+            # Check for certificate creation failure
+            if grep -q "Cannot save Signing Certificates without certificate private key" "$ASC_LOG"; then
+              echo ""
+              echo "=========================================="
+              echo "CERTIFICATE ISSUE DETECTED"
+              echo "=========================================="
+              echo ""
+              echo "The 'app-store-connect' API cannot find a distribution certificate."
+              echo ""
+              echo "To fix:"
+              echo "1. Log in to https://developer.apple.com/account"
+              echo "2. Go to Certificates, Identifiers & Profiles → Certificates"
+              echo "3. Click '+' to create a new 'Apple Distribution' certificate"
+              echo "4. Download the certificate and import into your keychain"
+              echo "5. Re-run this build"
+              echo ""
+              echo "OR use OPTION B (Manual Certificate Upload):"
+              echo "  - Encode your .p12 and .mobileprovision files to base64"
+              echo "  - Add MANUAL_P12_BASE64 and MANUAL_PROFILE_BASE64 to Codemagic"
+              echo ""
+              # Don't exit yet, allow fallback to MANUAL vars
+            fi
           else
             echo "Skipping app-store-connect (PRIVATE_KEY not set)"
           fi
