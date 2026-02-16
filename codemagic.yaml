@@ -262,10 +262,22 @@ workflows:
             CODE_SIGN_IDENTITY="Apple Distribution" \
             clean archive | tee xcodebuild_archive.log
 
-          # 7. EXPORT
+          # 7. EXPORT - with diagnostics before export
           if [ ! -d "build/ios/xcarchive/App.xcarchive" ]; then
               echo "ERROR: Archive failed."
               exit 1
+          fi
+
+          # Diagnostic: Check Info.plist inside the archive
+          echo "Diagnosing: Checking Info.plist in archive..."
+          APP_PLIST="build/ios/xcarchive/App.xcarchive/Products/Applications/App.app/Info.plist"
+          if [ -f "$APP_PLIST" ]; then
+            echo "Found Info.plist: $APP_PLIST"
+            /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PLIST" 2>/dev/null || echo "WARNING: CFBundleIdentifier not found in Info.plist"
+            echo "Full Info.plist keys:"
+            /usr/libexec/PlistBuddy -c "Print" "$APP_PLIST" 2>/dev/null | head -n 30 || true
+          else
+            echo "ERROR: Info.plist not found at $APP_PLIST"
           fi
 
           xcodebuild \
