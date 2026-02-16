@@ -279,11 +279,18 @@ workflows:
 
       - name: Sync Back to Repository
         script: |
+          # CAUTION: Syncing project files back to repository can corrupt project settings.
+          # This is disabled by default. To enable automatic syncing set CI_ALLOW_PBX_COMMIT=true in CI env.
+          if [ "${CI_ALLOW_PBX_COMMIT}" != "true" ]; then
+            echo "Skipping sync back to repository (CI_ALLOW_PBX_COMMIT not set to 'true')."
+            exit 0
+          fi
+
           git config --global user.email "builder@codemagic.io"
           git config --global user.name "Codemagic Builder"
           find . -name "project.pbxproj" -exec git add {} +
           if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "fix: global manual signing override for xcode 26.2"
+            git commit -m "ci: update project.pbxproj from build (automated)"
             git push origin HEAD:main
           else
             echo "No changes to sync."
