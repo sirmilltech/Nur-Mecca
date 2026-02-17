@@ -1,334 +1,154 @@
 workflows:
+  # --- IOS AUTOMATIC & MANUAL FALLBACK WORKFLOW ---
   ios-workflow:
     name: Nur-Mecca iOS Automatic Build
-    max_build_duration: 60
+    max_build_duration: 120
+    instance_type: mac_mini_m2
     integrations:
       app_store_connect: "Codemagic_Key"
     environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.milltech.nurmecca.app
       groups:
         - apple_auth 
       vars:
+        # Ionic Xcode worskspace and scheme details - adjust if your project structure is different
+
+        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
         DEVELOPMENT_TEAM: "JBMD9M6ZPC"
         APP_STORE_CONNECT_KEY_IDENTIFIER: "U2SA5VYGH7"
+        APP_STORE_APP_ID: 6759008303 # <-- Put the app id number here. This is found in App Store Connect > App > General > App Information
+      node: v16.11.1
+      xcode: latest # <-- set to specific version e.g. 14.3, 15.0 to avoid unexpected updates.
+      cocoapods: default # <-- set to specific version e.g. 1.11.3 to avoid unexpected updates.
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: develop
+          include: true
+          source: true
     scripts:
-      - name: Install dependencies
+      - name: Install npm dependencies for Ionic project
         script: npm install
-      - name: Capacitor Sync
-        script: |
-          npx cap sync ios
-          xcodebuild -resolvePackageDependencies -project "$XCODE_PROJECT" -scheme "$XCODE_SCHEME"
-      
-      - name: Build and Sign iOS App
-        script: |
-          # 1. DEBUG: Check if manual fallback is being used
-          if [ -n "$MANUAL_P12_BASE64" ]; then
-            echo "INFO: MANUAL_P12_BASE64 is set - will use manual certificate/profile fallback"
-          else
-            echo "INFO: MANUAL_P12_BASE64 is NOT set - attempting App Store Connect API"
-          fi
+      - name: Cocoapods installation
+        script: cd ios/App && pod install
 
-          if [ -z "$PRIVATE_KEY" ]; then
-            echo "WARNING: PRIVATE_KEY is empty. Add it to Codemagic env vars under 'apple_auth' group, or use MANUAL_P12_BASE64."
-          fi
+      - name: Build Xcode project to verify setup (Optional)
+        script:  xcode-project build-ipa --workspace "$XCODE_WORKSPACE" --scheme "$XCODE_SCHEME"
 
+      - name: Compile web code to dist folder
+        script: npm run build
+      - name: Update dependencies and copy web assets to native project
+        script: npx cap sync ios
+      - name: Build and Sign iOS App (Automatic with Manual Fallback)
+        script: |
+          # 1. Setup API Key for App Store Connect
           if [ -n "$PRIVATE_KEY" ]; then
             mkdir -p ~/.appstoreconnect/private_keys
             echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
-            
-            # Verify key file was created
-            if [ ! -f ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 ]; then
-              echo "ERROR: Failed to create API key file"
-              exit 1
-            fi
-            KEYFILE_SIZE=$(stat -f%z ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 || echo "0")
-            echo "API Key file created: $KEYFILE_SIZE bytes"
-            
-            # DEBUG: Print ISSUER_ID (obfuscated for security)
-            if [ -z "$ISSUER_ID" ]; then
-              echo "ERROR: ISSUER_ID is NOT set in Codemagic environment!"
-              echo "Add ISSUER_ID to the 'apple_auth' group in Codemagic settings."
-              exit 1
-            fi
-            ISSUER_OBFUSCATED="${ISSUER_ID:0:4}****${ISSUER_ID: -4}"
-            echo "ISSUER_ID set: $ISSUER_OBFUSCATED"
           fi
 
-          # 3. Fetch Signing Files (with logging and manual fallback)
+          # 2. Fetch Signing Files
           keychain initialize
-
-          ASC_LOG="$PWD/asc_fetch.log"
-          set -o pipefail
-          
           if [ -n "$PRIVATE_KEY" ]; then
-            echo "Running app-store-connect fetch-signing-files (logging to $ASC_LOG)"
             app-store-connect fetch-signing-files "$BUNDLE_ID" \
               --issuer-id "$ISSUER_ID" \
               --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
               --type IOS_APP_STORE \
-              --create > "$ASC_LOG" 2>&1 || true
-            ASC_EXIT=$?
-            echo "app-store-connect exit code: $ASC_EXIT"
-            echo "---- app-store-connect output ----"
-            sed -n '1,200p' "$ASC_LOG" || true
-            
-            # Check for certificate creation failure
-            if grep -q "Cannot save Signing Certificates without certificate private key" "$ASC_LOG"; then
-              echo ""
-              echo "=========================================="
-              echo "CERTIFICATE ISSUE DETECTED"
-              echo "=========================================="
-              echo ""
-              echo "The 'app-store-connect' API cannot find a distribution certificate."
-              echo ""
-              echo "To fix:"
-              echo "1. Log in to https://developer.apple.com/account"
-              echo "2. Go to Certificates, Identifiers & Profiles → Certificates"
-              echo "3. Click '+' to create a new 'Apple Distribution' certificate"
-              echo "4. Download the certificate and import into your keychain"
-              echo "5. Re-run this build"
-              echo ""
-              echo "OR use OPTION B (Manual Certificate Upload):"
-              echo "  - Encode your .p12 and .mobileprovision files to base64"
-              echo "  - Add MANUAL_P12_BASE64 and MANUAL_PROFILE_BASE64 to Codemagic"
-              echo ""
-              # Don't exit yet, allow fallback to MANUAL vars
-            fi
-          else
-            echo "Skipping app-store-connect (PRIVATE_KEY not set)"
+              --create || true
           fi
-
-          # Add any discovered certificates (if fetch worked)
           keychain add-certificates || true
 
-          # Inspect downloaded artifacts
-          echo "Checking for certificates and provisioning profiles after fetch..."
-          ls -la ~/Library/Developer/Xcode/UserData/Certificates 2>/dev/null || true
-          ls -la ~/Library/MobileDevice/Provisioning\ Profiles 2>/dev/null || true
-
-          # Fallback: if no certs/profiles were fetched, allow manual upload via CI env vars
-          CERT_COUNT=$(ls ~/Library/Developer/Xcode/UserData/Certificates/*.p12 2>/dev/null | wc -l || true)
-          PROFILE_COUNT=$(ls ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision 2>/dev/null | wc -l || true)
-
+          # 3. Handle Manual Fallback if API fetch failed
+          CERT_COUNT=$(ls ~/Library/Developer/Xcode/UserData/Certificates/*.p12 2>/dev/null | wc -l || echo "0")
           if [ "$CERT_COUNT" -eq 0 ] && [ -n "$MANUAL_P12_BASE64" ]; then
-            echo "No .p12 certificates found; decoding MANUAL_P12_BASE64 into ~/Library/Developer/Xcode/UserData/Certificates/manual.p12"
+            echo "Using manual certificate fallback..."
             mkdir -p ~/Library/Developer/Xcode/UserData/Certificates
             echo "$MANUAL_P12_BASE64" | base64 --decode > ~/Library/Developer/Xcode/UserData/Certificates/manual.p12
-            if [ -n "$MANUAL_P12_PASSWORD" ]; then
-              security import ~/Library/Developer/Xcode/UserData/Certificates/manual.p12 -P "$MANUAL_P12_PASSWORD" -A || true
-            else
-              security import ~/Library/Developer/Xcode/UserData/Certificates/manual.p12 -A || true
-            fi
+            security import ~/Library/Developer/Xcode/UserData/Certificates/manual.p12 -P "${MANUAL_P12_PASSWORD:-}" -A || true
           fi
 
-          if [ "$PROFILE_COUNT" -eq 0 ] && [ -n "$MANUAL_PROFILE_BASE64" ]; then
-            echo "No provisioning profiles found; decoding MANUAL_PROFILE_BASE64 into ~/Library/MobileDevice/Provisioning Profiles/manual.mobileprovision"
-            mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-            echo "$MANUAL_PROFILE_BASE64" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/manual.mobileprovision
-          fi
-
-          # Re-list to show results
-          echo "Post-fallback inspection:"
-          ls -la ~/Library/Developer/Xcode/UserData/Certificates 2>/dev/null || true
-          ls -la ~/Library/MobileDevice/Provisioning\ Profiles 2>/dev/null || true
+          # 4. Detect Profile UUID and Name for Patching
+          PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" 2>/dev/null | head -n 1)
+          if [ -z "$PROV_PROFILE_PATH" ]; then echo "ERROR: No profile found"; exit 1; fi
           
-          # 4. Detect Profile (with fallback)
-          PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" 2>/dev/null | head -n 1 || true)
-          
-          if [ -z "$PROV_PROFILE_PATH" ]; then
-            echo ""
-            echo "=========================================="
-            echo "ERROR: No provisioning profile found."
-            echo "=========================================="
-            echo ""
-            echo "Debug: Listing provisioning profile directory contents:"
-            ls -la ~/Library/MobileDevice/Provisioning\ Profiles 2>/dev/null || echo "Directory does not exist"
-            echo ""
-            echo "To fix, add one of the following to Codemagic environment variables:"
-            echo ""
-            echo "OPTION A: Use App Store Connect API (recommended)"
-            echo "  1. Ensure PRIVATE_KEY, ISSUER_ID, and APP_STORE_CONNECT_KEY_IDENTIFIER are set"
-            echo "  2. Create/register a provisioning profile in App Store Connect"
-            echo "  3. Re-run the build"
-            echo ""
-            echo "OPTION B: Manual Certificate + Profile Upload"
-            echo "  1. Set MANUAL_P12_BASE64 = (base64-encoded .p12 certificate file)"
-            echo "  2. Set MANUAL_P12_PASSWORD = (password for .p12, if any)"
-            echo "  3. Set MANUAL_PROFILE_BASE64 = (base64-encoded .mobileprovision file)"
-            echo "  4. Re-run the build"
-            echo ""
-            echo "Debug info:"
-            echo "  - app-store-connect log: $ASC_LOG"
-            echo "  - PRIVATE_KEY set: $([ -n "$PRIVATE_KEY" ] && echo "YES" || echo "NO")"
-            echo "  - MANUAL_P12_BASE64 set: $([ -n "$MANUAL_P12_BASE64" ] && echo "YES" || echo "NO")"
-            echo "  - MANUAL_PROFILE_BASE64 set: $([ -n "$MANUAL_PROFILE_BASE64" ] && echo "YES" || echo "NO")"
-            exit 1
-          fi
-          
-          echo "Found provisioning profile: $PROV_PROFILE_PATH"
-          
-          # Parse UUID and Name safely by writing the decoded plist to a temp file
-          TMP_PLIST=$(mktemp /tmp/provplist.XXXXXX.plist)
-          security cms -D -i "$PROV_PROFILE_PATH" > "$TMP_PLIST" 2>/dev/null || true
+          TMP_PLIST=$(mktemp /tmp/provplist.plist)
+          security cms -D -i "$PROV_PROFILE_PATH" > "$TMP_PLIST"
+          PROV_PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$TMP_PLIST")
+          PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$TMP_PLIST")
 
-          PROV_PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$TMP_PLIST" 2>/dev/null || echo "")
-          if [ -z "$PROV_PROFILE_UUID" ]; then
-            echo "WARNING: Could not parse UUID from provisioning profile; trying grep fallback"
-            PROV_PROFILE_UUID=$(grep -aA1 "UUID" "$PROV_PROFILE_PATH" | grep -oE "[-A-Z0-9]{36}" | head -n 1 || echo "")
-          fi
-
-          PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$TMP_PLIST" 2>/dev/null || echo "")
-
-          # Cleanup temp plist
-          rm -f "$TMP_PLIST" || true
-
-          if [ -z "$PROV_PROFILE_UUID" ] || [ -z "$PROV_PROFILE_NAME" ]; then
-            echo "ERROR: Could not parse UUID or Name from provisioning profile"
-            echo "Profile path: $PROV_PROFILE_PATH"
-            exit 1
-          fi
-
-          echo "Using Profile: $PROV_PROFILE_NAME ($PROV_PROFILE_UUID)"
-          echo "Profile path: $PROV_PROFILE_PATH"
-
-          # 4. Create ExportOptions.plist
-          cat <<EOF > ExportOptions.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store</string>
-              <key>teamID</key>
-              <string>$DEVELOPMENT_TEAM</string>
-              <key>provisioningProfiles</key>
-              <dict>
-                  <key>$BUNDLE_ID</key>
-                  <string>$PROV_PROFILE_NAME</string>
-              </dict>
-              <key>signingStyle</key>
-              <string>manual</string>
-              <key>signingCertificate</key>
-              <string>Apple Distribution</string>
-          </dict>
-          </plist>
-          EOF
-
-          # 5. EXPANDED: TRIPLE-LAYER PATCHING (Python + Sed + Verification)
-          # Layer A: Global Sed string replacement (Catch-all)
-          find . -name "project.pbxproj" -exec sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g' {} +
-
-          # Layer B: Python Surgical Injection
+          # 5. Triple-Layer Project Patching (Surgical fix for targets)
           python3 -c "
-          import sys, re, os
+          import os, re
           uuid, name, team = '$PROV_PROFILE_UUID', '$PROV_PROFILE_NAME', '$DEVELOPMENT_TEAM'
-          for root, dirs, files in os.walk('.'):
+          for root, dirs, files in os.walk('ios'):
               for file in files:
                   if file == 'project.pbxproj':
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
-                      target_search = re.search(r'([A-Z0-9]{24}) /\* App \*/', content)
-                      if target_search:
-                          tid = target_search.group(1)
-                          content = re.sub(tid + r' = \{[^}]*\};', '', content)
-                          attr_entry = f'{tid} = {{\n\t\t\t\t\tDevelopmentTeam = {team};\n\t\t\t\t\tProvisioningStyle = Manual;\n\t\t\t\t\tProvisioningProfile = \"{uuid}\";\n\t\t\t\t\tProvisioningProfileSpecifier = \"{name}\";\n\t\t\t\t}};'
-                          content = content.replace('TargetAttributes = {', 'TargetAttributes = {\n\t\t\t\t' + attr_entry)
-                      for key in ['PROVISIONING_PROFILE', 'PROVISIONING_PROFILE_SPECIFIER', 'CODE_SIGN_STYLE', 'DEVELOPMENT_TEAM']:
-                          content = re.sub(f'{key} = [^;]+;', '', content)
-                      settings = (f'\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";' +
-                                 f'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";' +
-                                 f'\n\t\t\t\tDEVELOPMENT_TEAM = {team};' +
-                                 '\n\t\t\t\tCODE_SIGN_STYLE = Manual;' +
-                                 '\n\t\t\t\tCODE_SIGN_IDENTITY = \"Apple Distribution\";')
-                      content = re.sub(r'(buildSettings = \{)', r'\1' + settings, content)
+                      content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
+                      pattern = r'(buildSettings = \{)'
+                      settings = (r'\1\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";' +
+                                 r'\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";' +
+                                 r'\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';' +
+                                 r'\n\t\t\t\tCODE_SIGN_STYLE = Manual;')
+                      content = re.sub(pattern, settings, content)
                       with open(path, 'w') as f: f.write(content)
           "
-          
-          # Layer C: Verification check
-          echo "Verifying Patch..."
-          grep "ProvisioningStyle = Manual" ios/App/App.xcodeproj/project.pbxproj | head -n 1
 
-          # 6. ARCHIVE - Hardening with -allowProvisioningUpdates and Fresh DerivedData
-          mkdir -p build/ios/xcarchive
-          rm -rf ./DerivedData
-          
+          # 6. Archive and Build IPA
           xcodebuild \
-            -project "$XCODE_PROJECT" \
+            -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
             -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
             -configuration Release \
             -archivePath build/ios/xcarchive/App \
-            -derivedDataPath ./DerivedData \
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 \
             -allowProvisioningUpdates \
-            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            clean archive | tee xcodebuild_archive.log
+            clean archive
 
-          # 7. FIX: Inject CFBundleIdentifier into Info.plist if missing
-          APP_PLIST="build/ios/xcarchive/App.xcarchive/Products/Applications/App.app/Info.plist"
-          if [ -f "$APP_PLIST" ]; then
-            EXISTING_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PLIST" 2>/dev/null || echo "")
-            if [ -z "$EXISTING_BUNDLE_ID" ]; then
-              echo "Injecting CFBundleIdentifier into Info.plist..."
-              /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$APP_PLIST"
-              echo "CFBundleIdentifier set to: $BUNDLE_ID"
-            else
-              echo "CFBundleIdentifier already present: $EXISTING_BUNDLE_ID"
-            fi
-          fi
+          # Create ExportOptions.plist
+          cat <<EOF > ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict><key>method</key><string>app-store</string>
+          <key>teamID</key><string>$DEVELOPMENT_TEAM</string>
+          <key>provisioningProfiles</key><dict><key>$BUNDLE_ID</key><string>$PROV_PROFILE_NAME</string></dict>
+          <key>signingStyle</key><string>manual</string></dict></plist>
+          EOF
 
-          # 8. EXPORT - with diagnostics before export
-          if [ ! -d "build/ios/xcarchive/App.xcarchive" ]; then
-              echo "ERROR: Archive failed."
-              exit 1
-          fi
-
-          # Diagnostic: Check Info.plist inside the archive
-          echo "Diagnosing: Checking Info.plist in archive..."
-          if [ -f "$APP_PLIST" ]; then
-            echo "Found Info.plist: $APP_PLIST"
-            /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PLIST" 2>/dev/null || echo "WARNING: CFBundleIdentifier not found in Info.plist"
-          else
-            echo "ERROR: Info.plist not found at $APP_PLIST"
-          fi
-
-          xcodebuild \
-            -exportArchive \
-            -archivePath build/ios/xcarchive/App.xcarchive \
-            -exportPath build/ios/ipa \
-            -exportOptionsPlist ExportOptions.plist \
+          xcodebuild -exportArchive -archivePath build/ios/xcarchive/App.xcarchive \
+            -exportPath build/ios/ipa -exportOptionsPlist ExportOptions.plist \
             -authenticationKeyID "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
-
-      - name: Sync Back to Repository
-        script: |
-          # CAUTION: Syncing project files back to repository can corrupt project settings.
-          # This is disabled by default. To enable automatic syncing set CI_ALLOW_PBX_COMMIT=true in CI env.
-          if [ "${CI_ALLOW_PBX_COMMIT}" != "true" ]; then
-            echo "Skipping sync back to repository (CI_ALLOW_PBX_COMMIT not set to 'true')."
-            exit 0
-          fi
-
-          git config --global user.email "builder@codemagic.io"
-          git config --global user.name "Codemagic Builder"
-          find . -name "project.pbxproj" -exec git add {} +
-          if [ -n "$(git status --porcelain)" ]; then
-            git commit -m "ci: update project.pbxproj from build (automated)"
-            git push origin HEAD:main
-          else
-            echo "No changes to sync."
-          fi
-
     artifacts:
-      - build/ios/xcarchive/*.xcarchive
       - build/ios/ipa/*.ipa
+      - ios/App/build/ios/ipa/App.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      email:
+        recipients:
+          - user_one@example.com
+          - user_two@example.com
+        notify:
+          success: false
+          failure: false
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        beta_groups:
+          - group name 1
+          - group name 2
+        submit_to_app_store: false
