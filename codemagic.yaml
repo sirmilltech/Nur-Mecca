@@ -20,7 +20,7 @@ workflows:
         DEVELOPMENT_TEAM: "JBMD9M6ZPC"
         APP_STORE_CONNECT_KEY_IDENTIFIER: "U2SA5VYGH7"
         APP_STORE_APP_ID: 6759008303
-      node: v20.11.0 # Updated to meet Capacitor 6 requirements
+      node: 20.11.0 # Explicitly set to v20 LTS to satisfy Capacitor 6 requirement (Node >= 18.0.0)
       xcode: latest
       cocoapods: default
     triggering:
