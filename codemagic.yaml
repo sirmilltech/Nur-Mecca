@@ -3,15 +3,18 @@ workflows:
     name: Nur-Mecca iOS Automatic Build
     max_build_duration: 120
     instance_type: mac_mini_m2
+
     integrations:
       app_store_connect: "Codemagic_Key"
+
     environment:
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.milltech.nurmecca.app
       groups:
-        - apple_auth 
+        - apple_auth
       vars:
+        BUILD_NUMBER: $CM_BUILD_ID
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
@@ -22,6 +25,7 @@ workflows:
       node: 20.11.0
       xcode: latest
       cocoapods: default
+
     triggering:
       events:
         - push
@@ -30,7 +34,13 @@ workflows:
           include: true
         - pattern: main
           include: true
+
     scripts:
+      - name: Set automatic iOS build number
+        script: |
+          cd ios/App
+          agvtool new-version -all $BUILD_NUMBER
+
       - name: Initialize Environment & Repair iOS Platform
         script: |
           echo "Node version: $(node -v)"
@@ -39,6 +49,7 @@ workflows:
           if [ ! -f "www/index.html" ]; then
             echo "<html><body>Nur-Mecca CI</body></html>" > www/index.html
           fi
+
           echo "Generating capacitor.config.json..."
           cat <<EOF > capacitor.config.json
           {
@@ -48,50 +59,51 @@ workflows:
             "bundledWebRuntime": false
           }
           EOF
+
           if [ ! -d "ios" ]; then
             npx cap add ios
           elif [ ! -f "ios/App/Podfile" ]; then
             rm -rf ios
             npx cap add ios
           fi
+
           npx cap sync ios
+
       - name: Force Manual Signing in Xcode
         script: |
           echo "Disabling Automatic Signing and Injecting Team ID..."
           PBXPROJ="ios/App/App.xcodeproj/project.pbxproj"
-          
-          # 1. Disable Automatic Signing
+
           sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
-          
-          # 2. Inject Team ID
           sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
-          
-          # 3. Force Code Sign Identity to Distribution
           sed -i '' "s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = \"iPhone Distribution\";/g" "$PBXPROJ"
           sed -i '' "s/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = [^;]*;/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = \"iPhone Distribution\";/g" "$PBXPROJ"
+
       - name: Install CocoaPods
         script: |
-          cd ios/App && pod install
+          cd ios/App
+          pod install
+
       - name: Build and Sign iOS App
         script: |
           if [ -n "$PRIVATE_KEY" ]; then
             mkdir -p ~/.appstoreconnect/private_keys
             echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
           fi
+
           keychain initialize
           keychain add-certificates || true
 
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" 2>/dev/null | head -n 1)
-          if [ -z "$PROV_PROFILE_PATH" ]; then 
+          if [ -z "$PROV_PROFILE_PATH" ]; then
             echo "ERROR: No profile found."
             exit 1
           fi
-          
+
           TMP_PLIST=$(mktemp /tmp/provplist.plist)
           security cms -D -i "$PROV_PROFILE_PATH" > "$TMP_PLIST"
           PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$TMP_PLIST")
 
-          # Explicitly pass CODE_SIGNING_ALLOWED=YES and Manual style to xcodebuild
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -106,19 +118,32 @@ workflows:
 
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <plist version="1.0"><dict><key>method</key><string>app-store</string>
-          <key>teamID</key><string>$DEVELOPMENT_TEAM</string>
-          <key>provisioningProfiles</key><dict><key>$BUNDLE_ID</key><string>$PROV_PROFILE_NAME</string></dict>
-          <key>signingStyle</key><string>manual</string></dict></plist>
+          <plist version="1.0" encoding="UTF-8">
+          <dict>
+            <key>method</key>
+            <string>app-store</string>
+            <key>teamID</key>
+            <string>$DEVELOPMENT_TEAM</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>$BUNDLE_ID</key>
+              <string>$PROV_PROFILE_NAME</string>
+            </dict>
+            <key>signingStyle</key>
+            <string>manual</string>
+          </dict>
+          </plist>
           EOF
 
           xcodebuild -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -exportPath build/ios/ipa \
             -exportOptionsPlist ExportOptions.plist
+
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
+
     publishing:
       app_store_connect:
         auth: integration
