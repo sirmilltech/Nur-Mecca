@@ -20,7 +20,7 @@ workflows:
         DEVELOPMENT_TEAM: "JBMD9M6ZPC"
         APP_STORE_CONNECT_KEY_IDENTIFIER: "U2SA5VYGH7"
         APP_STORE_APP_ID: 6759008303
-      node: v20.11.0 # Updated from 16.11.1 to satisfy Capacitor CLI requirements
+      node: v20.11.0 # Updated to meet Capacitor 6 requirements
       xcode: latest
       cocoapods: default
     triggering:
@@ -38,8 +38,7 @@ workflows:
         script: npm install
       - name: Build Web Assets
         script: |
-          # Create a dummy build folder if npm run build fails or isn't configured
-          # Capacitor requires a web directory to exist before 'cap add ios'
+          # Ensure a build directory exists for Capacitor
           npm run build || (mkdir -p dist && echo "<html></html>" > dist/index.html)
       - name: Capacitor Setup (Ensure ios folder and Podfile)
         script: |
@@ -52,7 +51,7 @@ workflows:
           npx cap sync ios
       - name: Cocoapods installation
         script: |
-          # 3. Now it is safe to enter and install
+          # 3. Enter and install
           cd ios/App && pod install
       - name: Build and Sign iOS App (Automatic with Manual Fallback)
         script: |
