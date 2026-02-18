@@ -24,7 +24,6 @@ workflows:
         APP_STORE_APP_ID: 6759008303
       node: 20.11.0
       xcode: latest
-      cocoapods: default
 
     triggering:
       events:
@@ -38,8 +37,8 @@ workflows:
     scripts:
       - name: Set automatic iOS build number
         script: |
-          cd ios/App
-          agvtool new-version -all $BUILD_NUMBER
+          # Use find to update all project files with the build number
+          find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUMBER;/g" {} +
 
       - name: Initialize Environment & Repair iOS Platform
         script: |
@@ -60,28 +59,23 @@ workflows:
           }
           EOF
 
-          if [ ! -d "ios" ]; then
-            npx cap add ios
-          elif [ ! -f "ios/App/Podfile" ]; then
-            rm -rf ios
-            npx cap add ios
-          fi
-
           npx cap sync ios
 
       - name: Force Manual Signing in Xcode
         script: |
           echo "Disabling Automatic Signing and Injecting Team ID..."
-          PBXPROJ="ios/App/App.xcodeproj/project.pbxproj"
+          PROJECT_FILE=$(find ios -name "project.pbxproj" | head -n 1)
+          if [ -f "$PROJECT_FILE" ]; then
+            sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PROJECT_FILE"
+            sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PROJECT_FILE"
+            sed -i '' "s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = \"iPhone Distribution\";/g" "$PROJECT_FILE"
+            sed -i '' "s/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = [^;]*;/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = \"iPhone Distribution\";/g" "$PROJECT_FILE"
+          fi
 
-          sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
-          sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
-          sed -i '' "s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = \"iPhone Distribution\";/g" "$PBXPROJ"
-          sed -i '' "s/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = [^;]*;/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = \"iPhone Distribution\";/g" "$PBXPROJ"
-
-      - name: Install CocoaPods
+      - name: Resolve Swift Package Dependencies
         script: |
-          pod install
+          # Since your project uses SPM (CapApp-SPM), we resolve packages instead of using CocoaPods
+          xcodebuild -resolvePackageDependencies -workspace "$XCODE_WORKSPACE" -scheme "$XCODE_SCHEME"
 
       - name: Build and Sign iOS App
         script: |
@@ -117,7 +111,8 @@ workflows:
 
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <plist version="1.0" encoding="UTF-8">
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
           <dict>
             <key>method</key>
             <string>app-store</string>
@@ -141,7 +136,6 @@ workflows:
 
     artifacts:
       - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
 
     publishing:
       app_store_connect:
