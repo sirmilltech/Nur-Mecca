@@ -13,6 +13,7 @@ workflows:
         - apple_auth 
       vars:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
         DEVELOPMENT_TEAM: "JBMD9M6ZPC"
@@ -33,17 +34,11 @@ workflows:
       - name: Initialize Environment & Repair iOS Platform
         script: |
           echo "Node version: $(node -v)"
-          
-          # 1. Install dependencies without triggering recursive build scripts
           npm install --ignore-scripts
-
-          # 2. Ensure web assets folder exists (Capacitor requirement)
           mkdir -p www
           if [ ! -f "www/index.html" ]; then
             echo "<html><body>Nur-Mecca CI</body></html>" > www/index.html
           fi
-
-          # 3. FORCE Capacitor Config (Fixes "Missing appId" error)
           echo "Generating capacitor.config.json..."
           cat <<EOF > capacitor.config.json
           {
@@ -53,38 +48,35 @@ workflows:
             "bundledWebRuntime": false
           }
           EOF
-
-          # 4. Repair/Add iOS Platform
           if [ ! -d "ios" ]; then
-            echo "iOS directory missing. Adding platform..."
             npx cap add ios
           elif [ ! -f "ios/App/Podfile" ]; then
-            echo "iOS project incomplete. Re-adding..."
             rm -rf ios
             npx cap add ios
           fi
-
-          # 5. Syncing
-          echo "Syncing Capacitor..."
           npx cap sync ios
+      - name: Force Team ID in Xcode
+        script: |
+          echo "Injecting Team ID $DEVELOPMENT_TEAM into project.pbxproj..."
+          # This replaces any default or empty DEVELOPMENT_TEAM with yours
+          sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" ios/App/App.xcodeproj/project.pbxproj
+          # Ensure code signing identity is set to iPhone Distribution
+          sed -i '' "s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = \"iPhone Distribution\";/g" ios/App/App.xcodeproj/project.pbxproj
       - name: Install CocoaPods
         script: |
           cd ios/App && pod install
       - name: Build and Sign iOS App
         script: |
-          # Setup API Key for App Store Connect
           if [ -n "$PRIVATE_KEY" ]; then
             mkdir -p ~/.appstoreconnect/private_keys
             echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
           fi
-
           keychain initialize
           keychain add-certificates || true
 
-          # Detect Provisioning Profile
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" 2>/dev/null | head -n 1)
           if [ -z "$PROV_PROFILE_PATH" ]; then 
-            echo "ERROR: No profile found. Check App Store Connect integration."
+            echo "ERROR: No profile found."
             exit 1
           fi
           
@@ -92,7 +84,6 @@ workflows:
           security cms -D -i "$PROV_PROFILE_PATH" > "$TMP_PLIST"
           PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$TMP_PLIST")
 
-          # Archive
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -100,9 +91,9 @@ workflows:
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -allowProvisioningUpdates \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             clean archive
 
-          # Create ExportOptions
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <plist version="1.0"><dict><key>method</key><string>app-store</string>
@@ -111,7 +102,6 @@ workflows:
           <key>signingStyle</key><string>manual</string></dict></plist>
           EOF
 
-          # Export IPA
           xcodebuild -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -exportPath build/ios/ipa \
