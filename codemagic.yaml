@@ -14,6 +14,7 @@ workflows:
       groups:
         - apple_auth
       vars:
+        BUILD_NUMBER: $CM_BUILD_ID
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
@@ -23,6 +24,7 @@ workflows:
         APP_STORE_APP_ID: 6759008303
       node: 20.11.0
       xcode: latest
+      cocoapods: default
 
     triggering:
       events:
@@ -34,51 +36,52 @@ workflows:
           include: true
 
     scripts:
-      - name: Universal Version Overwrite
-        script: | 
-          echo "Forcing version references to $BUILD_NUMBER"
-          find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUMBER;/g" {} +
-          
-          # Find and update Info.plist files
-          PLIST_FILES=$(find ios -name "Info.plist")
-          for f in $PLIST_FILES; do
-            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$f" || echo "Could not set version in $f"
-          done
+      - name: Set automatic iOS build number
+        script: |
+          agvtool new-version -all $BUILD_NUMBER
 
       - name: Initialize Environment & Repair iOS Platform
         script: |
+          echo "Node version: $(node -v)"
           npm install --ignore-scripts
           mkdir -p www
           if [ ! -f "www/index.html" ]; then
             echo "<html><body>Nur-Mecca CI</body></html>" > www/index.html
           fi
 
-          # Ensure capacitor.config.json exists for sync
-          if [ ! -f "capacitor.config.json" ]; then
-            cat <<EOF > capacitor.config.json
-            {
-              "appId": "$BUNDLE_ID",
-              "appName": "Nur-Mecca",
-              "webDir": "www",
-              "bundledWebRuntime": false
-            }
+          echo "Generating capacitor.config.json..."
+          cat <<EOF > capacitor.config.json
+          {
+            "appId": "$BUNDLE_ID",
+            "appName": "Nur-Mecca",
+            "webDir": "www",
+            "bundledWebRuntime": false
+          }
           EOF
+
+          if [ ! -d "ios" ]; then
+            npx cap add ios
+          elif [ ! -f "ios/App/Podfile" ]; then
+            rm -rf ios
+            npx cap add ios
           fi
 
           npx cap sync ios
 
-      - name: Force Manual Signing
+      - name: Force Manual Signing in Xcode
         script: |
-          PROJECT_FILE=$(find ios -name "project.pbxproj" | head -n 1)
-          if [ -f "$PROJECT_FILE" ]; then
-            sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PROJECT_FILE"
-            sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PROJECT_FILE"
-          fi
+          echo "Disabling Automatic Signing and Injecting Team ID..."
+          PBXPROJ="ios/App/App.xcodeproj/project.pbxproj"
 
-      - name: Resolve Swift Package Dependencies
+          sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
+          sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
+          sed -i '' "s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = \"iPhone Distribution\";/g" "$PBXPROJ"
+          sed -i '' "s/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = [^;]*;/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = \"iPhone Distribution\";/g" "$PBXPROJ"
+
+      - name: Install CocoaPods
         script: |
-          # Since you use SPM instead of CocoaPods, we resolve packages here
-          xcodebuild -resolvePackageDependencies -workspace "$XCODE_WORKSPACE" -scheme "$XCODE_SCHEME"
+          cd ios/App
+          pod install
 
       - name: Build and Sign iOS App
         script: |
@@ -90,9 +93,15 @@ workflows:
           keychain initialize
           keychain add-certificates || true
 
-          # Find the provisioning profile provided by Codemagic
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" 2>/dev/null | head -n 1)
-          PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$PROV_PROFILE_PATH"))
+          if [ -z "$PROV_PROFILE_PATH" ]; then
+            echo "ERROR: No profile found."
+            exit 1
+          fi
+
+          TMP_PLIST=$(mktemp /tmp/provplist.plist)
+          security cms -D -i "$PROV_PROFILE_PATH" > "$TMP_PLIST"
+          PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$TMP_PLIST")
 
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
@@ -100,20 +109,27 @@ workflows:
             -sdk iphoneos \
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
+            -allowProvisioningUpdates \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             CODE_SIGN_STYLE="Manual" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             clean archive
 
-          # Create Export Options
           cat <<EOF > ExportOptions.plist
-          <plist version="1.0">
+          <?xml version="1.0" encoding="UTF-8"?>
+          <plist version="1.0" encoding="UTF-8">
           <dict>
-            <key>method</key><string>app-store</string>
-            <key>teamID</key><string>$DEVELOPMENT_TEAM</string>
+            <key>method</key>
+            <string>app-store</string>
+            <key>teamID</key>
+            <string>$DEVELOPMENT_TEAM</string>
             <key>provisioningProfiles</key>
-            <dict><key>$BUNDLE_ID</key><string>$PROV_PROFILE_NAME</string></dict>
-            <key>signingStyle</key><string>manual</string>
+            <dict>
+              <key>$BUNDLE_ID</key>
+              <string>$PROV_PROFILE_NAME</string>
+            </dict>
+            <key>signingStyle</key>
+            <string>manual</string>
           </dict>
           </plist>
           EOF
@@ -125,6 +141,7 @@ workflows:
 
     artifacts:
       - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
 
     publishing:
       app_store_connect:
