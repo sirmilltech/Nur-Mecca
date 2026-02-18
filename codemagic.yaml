@@ -35,15 +35,22 @@ workflows:
           include: true
 
     scripts:
-      - name: Force Build Number Update
+      - name: Hard-Force Build Number Update
         script: | 
-          # This script forces the build number into the Info.plist directly
-          # This bypasses Xcode versioning issues.
-          INFO_PLIST="ios/App/App/Info.plist"
-          echo "Forcing CFBundleVersion to $BUILD_NUMBER in $INFO_PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$INFO_PLIST"
+          echo "Force-updating build number to: $BUILD_NUMBER"
           
-          # Also run agvtool as a backup for the project file
+          # 1. Update the Info.plist (Standard way)
+          INFO_PLIST="ios/App/App/Info.plist"
+          if [ -f "$INFO_PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$INFO_PLIST"
+          fi
+          
+          # 2. Update the Project File (The Nuclear Way)
+          # This replaces CURRENT_PROJECT_VERSION = 1; with the actual Codemagic build number
+          PBXPROJ="ios/App/App.xcodeproj/project.pbxproj"
+          sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUMBER;/g" "$PBXPROJ"
+          
+          # 3. Use agvtool as a final secondary check
           cd ios/App
           agvtool new-version -all $BUILD_NUMBER
 
