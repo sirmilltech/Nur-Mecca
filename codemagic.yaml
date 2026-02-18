@@ -14,7 +14,6 @@ workflows:
       groups:
         - apple_auth
       vars:
-        # We use Codemagic's auto-incrementing build number
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
@@ -38,8 +37,8 @@ workflows:
     scripts:
       - name: Set build version from Codemagic
         script: | 
-          # This dynamically sets the build number to the current Codemagic build count
-          # If your last successful build was 1, this will automatically be 2, 3, etc.
+          # Change directory to where the .xcodeproj is located
+          cd ios/App
           echo "Setting build number to $BUILD_NUMBER"
           agvtool new-version -all $BUILD_NUMBER
 
@@ -119,6 +118,7 @@ workflows:
 
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
             <key>method</key>
