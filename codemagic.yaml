@@ -32,27 +32,39 @@ workflows:
     scripts:
       - name: Initialize Environment & Repair iOS Platform
         script: |
-          echo "Setting Node version..."
-          nvm use 20 || nvm install 20
-
-          # 1. FIX EAGAIN: Install with --ignore-scripts to stop the 'npm run build' infinite loop
+          echo "Node version: $(node -v)"
+          
+          # 1. Install dependencies without triggering recursive build scripts
           npm install --ignore-scripts
 
-          # 2. FIX Missing appId: Manually ensure the web assets folder exists 
-          # Capacitor requires this folder to exist before it can add a platform.
+          # 2. Ensure web assets folder exists (Capacitor requirement)
           mkdir -p www
           if [ ! -f "www/index.html" ]; then
             echo "<html><body>Nur-Mecca CI</body></html>" > www/index.html
           fi
 
-          # 3. Repair Platform logic
-          echo "Checking if Podfile exists..."
-          if [ ! -f "ios/App/Podfile" ]; then
-            echo "iOS project is incomplete. Re-adding platform..."
+          # 3. FORCE Capacitor Config (Fixes "Missing appId" error)
+          echo "Generating capacitor.config.json..."
+          cat <<EOF > capacitor.config.json
+          {
+            "appId": "$BUNDLE_ID",
+            "appName": "Nur-Mecca",
+            "webDir": "www",
+            "bundledWebRuntime": false
+          }
+          EOF
+
+          # 4. Repair/Add iOS Platform
+          if [ ! -d "ios" ]; then
+            echo "iOS directory missing. Adding platform..."
+            npx cap add ios
+          elif [ ! -f "ios/App/Podfile" ]; then
+            echo "iOS project incomplete. Re-adding..."
             rm -rf ios
             npx cap add ios
           fi
 
+          # 5. Syncing
           echo "Syncing Capacitor..."
           npx cap sync ios
       - name: Install CocoaPods
