@@ -34,31 +34,28 @@ workflows:
           include: true
           source: true
     scripts:
-      - name: Initialize Environment
+      - name: Initialize Environment & Repair Platform
         script: |
           # 1. Use Node 20
           nvm use 20 || nvm install 20
           npm install
           
-          # 2. Capacitor build requirement
+          # 2. Ensure web assets exist (Required for Capacitor)
           npm run build || (mkdir -p www && echo "<html></html>" > www/index.html)
           
-          # 3. Verify files for debugging
-          echo "Checking directory structure..."
-          ls -R ios/App | grep Podfile || echo "Podfile NOT found in ios/App"
+          # 3. REPAIR STEP: If ios/App/Podfile doesn't exist, recreate the platform
+          if [ ! -f "ios/App/Podfile" ]; then
+            echo "Podfile missing on build server. Re-initializing iOS platform..."
+            rm -rf ios
+            npx cap add ios
+          fi
           
           # 4. Sync Capacitor
           npx cap sync ios
       - name: Cocoapods installation
         script: |
-          # FIX: Explicitly enter the directory where the Podfile lives
-          if [ -f "ios/App/Podfile" ]; then
-            cd ios/App && pod install
-          else
-            echo "ERROR: Podfile still not found at ios/App/Podfile"
-            find . -name "Podfile"
-            exit 1
-          fi
+          # The previous step now guarantees this file exists
+          cd ios/App && pod install
       - name: Build and Sign iOS App
         script: |
           # 1. Setup API Key
