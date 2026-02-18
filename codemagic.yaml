@@ -38,6 +38,7 @@ workflows:
     scripts:
       - name: Set automatic iOS build number
         script: |
+          cd ios/App
           agvtool new-version -all $BUILD_NUMBER
 
       - name: Initialize Environment & Repair iOS Platform
@@ -80,7 +81,6 @@ workflows:
 
       - name: Install CocoaPods
         script: |
-          cd ios/App
           pod install
 
       - name: Build and Sign iOS App
