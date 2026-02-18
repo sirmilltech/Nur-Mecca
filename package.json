@@ -4,7 +4,7 @@
   "description": "Nur-Mecca Mobile Application",
   "main": "index.js",
   "scripts": {
-    "build": "npm run build",
+    "build": "echo 'No web build step required for CI asset generation'",
     "sync": "npx cap sync",
     "ios:sync": "npx cap sync ios",
     "android:sync": "npx cap sync android",
