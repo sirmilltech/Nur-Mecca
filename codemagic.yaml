@@ -3,18 +3,14 @@ workflows:
     name: Nur-Mecca iOS Automatic Build
     max_build_duration: 120
     instance_type: mac_mini_m2
-
     integrations:
       app_store_connect: "Codemagic_Key"
-
     environment:
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.milltech.nurmecca.app
-
       groups:
-        - apple_auth
-
+        - apple_auth 
       vars:
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_SCHEME: "App"
@@ -22,11 +18,9 @@ workflows:
         DEVELOPMENT_TEAM: "JBMD9M6ZPC"
         APP_STORE_CONNECT_KEY_IDENTIFIER: "U2SA5VYGH7"
         APP_STORE_APP_ID: 6759008303
-
       node: 20.11.0
       xcode: latest
       cocoapods: default
-
     triggering:
       events:
         - push
@@ -35,74 +29,58 @@ workflows:
           include: true
         - pattern: main
           include: true
-
     scripts:
-
       - name: Initialize Environment & Repair iOS Platform
         script: |
-          echo "Using Node 20..."
-          nvm install 20
-          nvm use 20
+          echo "Setting Node version..."
+          nvm use 20 || nvm install 20
 
-          npm install
+          # 1. FIX EAGAIN: Install with --ignore-scripts to stop the 'npm run build' infinite loop
+          npm install --ignore-scripts
 
-          echo "Ensuring web assets exist..."
-          npm run build || (mkdir -p www && echo "<html></html>" > www/index.html)
+          # 2. FIX Missing appId: Manually ensure the web assets folder exists 
+          # Capacitor requires this folder to exist before it can add a platform.
+          mkdir -p www
+          if [ ! -f "www/index.html" ]; then
+            echo "<html><body>Nur-Mecca CI</body></html>" > www/index.html
+          fi
 
+          # 3. Repair Platform logic
           echo "Checking if Podfile exists..."
           if [ ! -f "ios/App/Podfile" ]; then
-            echo "Podfile missing. Recreating iOS platform..."
+            echo "iOS project is incomplete. Re-adding platform..."
             rm -rf ios
             npx cap add ios
           fi
 
           echo "Syncing Capacitor..."
           npx cap sync ios
-
       - name: Install CocoaPods
         script: |
-          cd ios/App
-          pod install
-          cd ../..
-
+          cd ios/App && pod install
       - name: Build and Sign iOS App
         script: |
-
-          echo "Setting up App Store Connect API key..."
+          # Setup API Key for App Store Connect
           if [ -n "$PRIVATE_KEY" ]; then
             mkdir -p ~/.appstoreconnect/private_keys
             echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
           fi
 
-          echo "Initialize keychain..."
           keychain initialize
           keychain add-certificates || true
 
-          echo "Manual .p12 fallback if needed..."
-          CERT_COUNT=$(ls ~/Library/Developer/Xcode/UserData/Certificates/*.p12 2>/dev/null | wc -l || echo "0")
-
-          if [ "$CERT_COUNT" -eq 0 ] && [ -n "$MANUAL_P12_BASE64" ]; then
-            mkdir -p ~/Library/Developer/Xcode/UserData/Certificates
-            echo "$MANUAL_P12_BASE64" | base64 --decode > ~/Library/Developer/Xcode/UserData/Certificates/manual.p12
-            security import ~/Library/Developer/Xcode/UserData/Certificates/manual.p12 -P "${MANUAL_P12_PASSWORD:-}" -A || true
-          fi
-
-          echo "Fetching provisioning profile..."
-          PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" | head -n 1)
-
-          if [ -z "$PROV_PROFILE_PATH" ]; then
-            echo "ERROR: No provisioning profile found"
+          # Detect Provisioning Profile
+          PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" 2>/dev/null | head -n 1)
+          if [ -z "$PROV_PROFILE_PATH" ]; then 
+            echo "ERROR: No profile found. Check App Store Connect integration."
             exit 1
           fi
-
+          
           TMP_PLIST=$(mktemp /tmp/provplist.plist)
           security cms -D -i "$PROV_PROFILE_PATH" > "$TMP_PLIST"
-
-          PROV_PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$TMP_PLIST")
           PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$TMP_PLIST")
 
-          echo "Building archive..."
-
+          # Archive
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -112,38 +90,23 @@ workflows:
             -allowProvisioningUpdates \
             clean archive
 
-          echo "Creating ExportOptions.plist..."
-
+          # Create ExportOptions
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store</string>
-              <key>teamID</key>
-              <string>$DEVELOPMENT_TEAM</string>
-              <key>provisioningProfiles</key>
-              <dict>
-                  <key>$BUNDLE_ID</key>
-                  <string>$PROV_PROFILE_NAME</string>
-              </dict>
-              <key>signingStyle</key>
-              <string>manual</string>
-          </dict>
-          </plist>
+          <plist version="1.0"><dict><key>method</key><string>app-store</string>
+          <key>teamID</key><string>$DEVELOPMENT_TEAM</string>
+          <key>provisioningProfiles</key><dict><key>$BUNDLE_ID</key><string>$PROV_PROFILE_NAME</string></dict>
+          <key>signingStyle</key><string>manual</string></dict></plist>
           EOF
 
-          echo "Exporting IPA..."
-
+          # Export IPA
           xcodebuild -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -exportPath build/ios/ipa \
             -exportOptionsPlist ExportOptions.plist
-
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
-
     publishing:
       app_store_connect:
         auth: integration
