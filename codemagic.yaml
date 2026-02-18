@@ -38,16 +38,13 @@ workflows:
       - name: Universal Version Overwrite
         script: | 
           echo "Nuclear Fix: Forcing all version references to $BUILD_NUMBER"
-          
-          # 1. Force update the Xcode project file directly (This is where Build 1 is usually stuck)
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUMBER;/g" {} +
-          
-          # 2. Force update all Info.plist files
           find . -name "Info.plist" -exec /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" {} +
           
-          # 3. Final agvtool check
-          cd ios/App
-          agvtool new-version -all $BUILD_NUMBER
+          # Try to run agvtool if the directory exists
+          if [ -d "ios/App" ]; then
+            cd ios/App && agvtool new-version -all $BUILD_NUMBER
+          fi
 
       - name: Initialize Environment & Repair iOS Platform
         script: |
@@ -74,13 +71,25 @@ workflows:
 
       - name: Force Manual Signing
         script: |
-          PBXPROJ="ios/App/App.xcodeproj/project.pbxproj"
-          sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
-          sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
+          # Use find to locate the project file regardless of exact path
+          PROJECT_FILE=$(find ios -name "project.pbxproj" | head -n 1)
+          if [ -f "$PROJECT_FILE" ]; then
+            sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PROJECT_FILE"
+            sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PROJECT_FILE"
+          fi
 
       - name: Install CocoaPods
         script: |
-          cd ios/App
+          # Dynamically find the directory containing the Podfile
+          PODFILE_PATH=$(find ios -name "Podfile" | head -n 1)
+          if [ -z "$PODFILE_PATH" ]; then
+            echo "ERROR: Podfile not found in ios directory!"
+            exit 1
+          fi
+          
+          POD_DIR=$(dirname "$PODFILE_PATH")
+          echo "Found Podfile in $POD_DIR. Installing pods..."
+          cd "$POD_DIR"
           pod install
 
       - name: Build and Sign iOS App
