@@ -85,6 +85,17 @@ workflows:
             sed -i '' "s/PRODUCT_BUNDLE_IDENTIFIER = [^;]*;/PRODUCT_BUNDLE_IDENTIFIER = $BUNDLE_ID;/g" "$PBXPROJ"
           fi
 
+      - name: Patch Info.plist for Missing Bundle ID
+        script: |
+          echo "Patching Info.plist to ensure CFBundleIdentifier is present..."
+          # Find the Info.plist for the main app target
+          PLIST_PATH=$(find ios -name "Info.plist" | grep -v "Pods" | head -n 1)
+          if [ -f "$PLIST_PATH" ]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST_PATH" || \
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$PLIST_PATH"
+            echo "Patched $PLIST_PATH"
+          fi
+
       - name: Resolve Swift Package Dependencies
         script: |
           # Using the dynamically detected workspace path
@@ -110,7 +121,7 @@ workflows:
           security cms -D -i "$PROV_PROFILE_PATH" > "$TMP_PLIST"
           PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$TMP_PLIST")
 
-          # Archive with explicit Bundle ID injection to prevent "Missing Bundle Identifier" error
+          # Archive with explicit Bundle ID injection and legacy build system checks
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
