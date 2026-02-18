@@ -35,28 +35,22 @@ workflows:
           include: true
 
     scripts:
-      - name: Hard-Force Build Number Update
+      - name: Universal Version Overwrite
         script: | 
-          echo "Force-updating build number to: $BUILD_NUMBER"
+          echo "Nuclear Fix: Forcing all version references to $BUILD_NUMBER"
           
-          # 1. Update the Info.plist (Standard way)
-          INFO_PLIST="ios/App/App/Info.plist"
-          if [ -f "$INFO_PLIST" ]; then
-            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$INFO_PLIST"
-          fi
+          # 1. Force update the Xcode project file directly (This is where Build 1 is usually stuck)
+          find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUMBER;/g" {} +
           
-          # 2. Update the Project File (The Nuclear Way)
-          # This replaces CURRENT_PROJECT_VERSION = 1; with the actual Codemagic build number
-          PBXPROJ="ios/App/App.xcodeproj/project.pbxproj"
-          sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUMBER;/g" "$PBXPROJ"
+          # 2. Force update all Info.plist files
+          find . -name "Info.plist" -exec /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" {} +
           
-          # 3. Use agvtool as a final secondary check
+          # 3. Final agvtool check
           cd ios/App
           agvtool new-version -all $BUILD_NUMBER
 
       - name: Initialize Environment & Repair iOS Platform
         script: |
-          echo "Node version: $(node -v)"
           npm install --ignore-scripts
           mkdir -p www
           if [ ! -f "www/index.html" ]; then
@@ -75,21 +69,14 @@ workflows:
 
           if [ ! -d "ios" ]; then
             npx cap add ios
-          elif [ ! -f "ios/App/Podfile" ]; then
-            rm -rf ios
-            npx cap add ios
           fi
-
           npx cap sync ios
 
-      - name: Force Manual Signing in Xcode
+      - name: Force Manual Signing
         script: |
-          echo "Disabling Automatic Signing and Injecting Team ID..."
           PBXPROJ="ios/App/App.xcodeproj/project.pbxproj"
           sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
           sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
-          sed -i '' "s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = \"iPhone Distribution\";/g" "$PBXPROJ"
-          sed -i '' "s/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = [^;]*;/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = \"iPhone Distribution\";/g" "$PBXPROJ"
 
       - name: Install CocoaPods
         script: |
@@ -107,14 +94,7 @@ workflows:
           keychain add-certificates || true
 
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" 2>/dev/null | head -n 1)
-          if [ -z "$PROV_PROFILE_PATH" ]; then
-            echo "ERROR: No profile found."
-            exit 1
-          fi
-
-          TMP_PLIST=$(mktemp /tmp/provplist.plist)
-          security cms -D -i "$PROV_PROFILE_PATH" > "$TMP_PLIST"
-          PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$TMP_PLIST")
+          PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$PROV_PROFILE_PATH"))
 
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
@@ -129,21 +109,13 @@ workflows:
             clean archive
 
           cat <<EOF > ExportOptions.plist
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-            <key>method</key>
-            <string>app-store</string>
-            <key>teamID</key>
-            <string>$DEVELOPMENT_TEAM</string>
+            <key>method</key><string>app-store</string>
+            <key>teamID</key><string>$DEVELOPMENT_TEAM</string>
             <key>provisioningProfiles</key>
-            <dict>
-              <key>$BUNDLE_ID</key>
-              <string>$PROV_PROFILE_NAME</string>
-            </dict>
-            <key>signingStyle</key>
-            <string>manual</string>
+            <dict><key>$BUNDLE_ID</key><string>$PROV_PROFILE_NAME</string></dict>
+            <key>signingStyle</key><string>manual</string>
           </dict>
           </plist>
           EOF
@@ -155,7 +127,6 @@ workflows:
 
     artifacts:
       - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
 
     publishing:
       app_store_connect:
