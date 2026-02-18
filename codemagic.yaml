@@ -36,7 +36,6 @@ workflows:
     scripts:
       - name: Set Node Version & Install dependencies
         script: |
-          # Force Node 20 via nvm to ensure Capacitor 6 compatibility
           node -v
           nvm -v
           npm install
