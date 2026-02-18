@@ -15,8 +15,6 @@ workflows:
         - apple_auth
       vars:
         BUILD_NUMBER: $CM_BUILD_ID
-        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
-        XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
         DEVELOPMENT_TEAM: "JBMD9M6ZPC"
@@ -61,20 +59,33 @@ workflows:
 
           npx cap sync ios
 
+      - name: Auto-Detect Xcode Paths
+        script: |
+          # Dynamically find the workspace and project paths to avoid "not found" errors
+          DETECTED_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
+          DETECTED_PROJECT=$(find ios -name "*.xcodeproj" | head -n 1)
+          
+          echo "Found Workspace: $DETECTED_WORKSPACE"
+          echo "Found Project: $DETECTED_PROJECT"
+          
+          # Export to environment for subsequent steps
+          echo "XCODE_WORKSPACE=$DETECTED_WORKSPACE" >> $CM_ENV
+          echo "XCODE_PROJECT=$DETECTED_PROJECT" >> $CM_ENV
+
       - name: Force Manual Signing in Xcode
         script: |
           echo "Disabling Automatic Signing and Injecting Team ID..."
-          PROJECT_FILE=$(find ios -name "project.pbxproj" | head -n 1)
-          if [ -f "$PROJECT_FILE" ]; then
-            sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PROJECT_FILE"
-            sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PROJECT_FILE"
-            sed -i '' "s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = \"iPhone Distribution\";/g" "$PROJECT_FILE"
-            sed -i '' "s/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = [^;]*;/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = \"iPhone Distribution\";/g" "$PROJECT_FILE"
+          if [ -f "$XCODE_PROJECT/project.pbxproj" ]; then
+            PBXPROJ="$XCODE_PROJECT/project.pbxproj"
+            sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
+            sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
+            sed -i '' "s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = \"iPhone Distribution\";/g" "$PBXPROJ"
+            sed -i '' "s/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = [^;]*;/\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = \"iPhone Distribution\";/g" "$PBXPROJ"
           fi
 
       - name: Resolve Swift Package Dependencies
         script: |
-          # Since your project uses SPM (CapApp-SPM), we resolve packages instead of using CocoaPods
+          # Using the dynamically detected workspace path
           xcodebuild -resolvePackageDependencies -workspace "$XCODE_WORKSPACE" -scheme "$XCODE_SCHEME"
 
       - name: Build and Sign iOS App
