@@ -49,13 +49,8 @@ workflows:
             rm -rf ios
             npx cap add ios
           fi
-          
           # 4. Sync Capacitor
           npx cap sync ios
-      - name: Cocoapods installation
-        script: |
-          # The previous step now guarantees this file exists
-          cd ios/App && pod install
       - name: Build and Sign iOS App
         script: |
           # 1. Setup API Key
