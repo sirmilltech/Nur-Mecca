@@ -37,9 +37,10 @@ workflows:
       - name: Set Node Version & Install dependencies
         script: |
           # Force Node 20 via nvm to ensure Capacitor 6 compatibility
-          nvm use 20 || nvm install 20
           node -v
+          nvm -v
           npm install
+
       - name: Build Web Assets
         script: |
           # Ensure a build directory exists for Capacitor
