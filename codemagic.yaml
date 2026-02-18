@@ -35,11 +35,16 @@ workflows:
           include: true
 
     scripts:
-      - name: Set build version from Codemagic
+      - name: Force Build Number Update
         script: | 
-          # Change directory to where the .xcodeproj is located
+          # This script forces the build number into the Info.plist directly
+          # This bypasses Xcode versioning issues.
+          INFO_PLIST="ios/App/App/Info.plist"
+          echo "Forcing CFBundleVersion to $BUILD_NUMBER in $INFO_PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$INFO_PLIST"
+          
+          # Also run agvtool as a backup for the project file
           cd ios/App
-          echo "Setting build number to $BUILD_NUMBER"
           agvtool new-version -all $BUILD_NUMBER
 
       - name: Initialize Environment & Repair iOS Platform
