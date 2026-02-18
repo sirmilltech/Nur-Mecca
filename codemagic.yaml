@@ -34,39 +34,34 @@ workflows:
           include: true
           source: true
     scripts:
-      - name: Initialize Node and Capacitor
+      - name: Initialize Environment
         script: |
-          # 1. Force Node 20 to satisfy Capacitor 6
+          # 1. Use Node 20
           nvm use 20 || nvm install 20
-          node -v
-          
-          # 2. Install dependencies
           npm install
           
-          # 3. Build Web Assets (Mandatory for Capacitor sync)
-          npm run build || (mkdir -p dist && echo "<html></html>" > dist/index.html)
+          # 2. Capacitor build requirement
+          npm run build || (mkdir -p www && echo "<html></html>" > www/index.html)
           
-          # 4. Capacitor Setup
-          # If ios folder is missing, add it. If it exists, sync it.
-          if [ ! -d "ios" ]; then
-            echo "Creating iOS platform..."
-            npx cap add ios
-          fi
+          # 3. Verify files for debugging
+          echo "Checking directory structure..."
+          ls -R ios/App | grep Podfile || echo "Podfile NOT found in ios/App"
           
-          # Ensure Podfile is generated/updated
+          # 4. Sync Capacitor
           npx cap sync ios
       - name: Cocoapods installation
         script: |
-          # Navigate to the correct internal directory where Capacitor places the Podfile
-          if [ -d "ios/App" ]; then
+          # FIX: Explicitly enter the directory where the Podfile lives
+          if [ -f "ios/App/Podfile" ]; then
             cd ios/App && pod install
           else
-            echo "ERROR: ios/App directory not found. Cap add ios must have failed."
+            echo "ERROR: Podfile still not found at ios/App/Podfile"
+            find . -name "Podfile"
             exit 1
           fi
-      - name: Build and Sign iOS App (Automatic with Manual Fallback)
+      - name: Build and Sign iOS App
         script: |
-          # 1. Setup API Key for App Store Connect
+          # 1. Setup API Key
           if [ -n "$PRIVATE_KEY" ]; then
             mkdir -p ~/.appstoreconnect/private_keys
             echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
