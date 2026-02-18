@@ -14,7 +14,7 @@ workflows:
       groups:
         - apple_auth
       vars:
-        BUILD_NUMBER: $CM_BUILD_ID
+        # We use Codemagic's auto-incrementing build number
         XCODE_WORKSPACE: "ios/App/App.xcworkspace"
         XCODE_PROJECT: "ios/App/App.xcodeproj"
         XCODE_SCHEME: "App"
@@ -36,10 +36,12 @@ workflows:
           include: true
 
     scripts:
-      - name: Force iOS build number
-        script: |
-          echo "Setting build number to 2"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion 2" ios/App/App/Info.plist
+      - name: Set build version from Codemagic
+        script: | 
+          # This dynamically sets the build number to the current Codemagic build count
+          # If your last successful build was 1, this will automatically be 2, 3, etc.
+          echo "Setting build number to $BUILD_NUMBER"
+          agvtool new-version -all $BUILD_NUMBER
 
       - name: Initialize Environment & Repair iOS Platform
         script: |
@@ -73,7 +75,6 @@ workflows:
         script: |
           echo "Disabling Automatic Signing and Injecting Team ID..."
           PBXPROJ="ios/App/App.xcodeproj/project.pbxproj"
-
           sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
           sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
           sed -i '' "s/CODE_SIGN_IDENTITY = [^;]*;/CODE_SIGN_IDENTITY = \"iPhone Distribution\";/g" "$PBXPROJ"
@@ -118,7 +119,7 @@ workflows:
 
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
-          <plist version="1.0" encoding="UTF-8">
+          <plist version="1.0">
           <dict>
             <key>method</key>
             <string>app-store</string>
