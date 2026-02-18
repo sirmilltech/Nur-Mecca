@@ -34,29 +34,36 @@ workflows:
           include: true
           source: true
     scripts:
-      - name: Set Node Version & Install dependencies
+      - name: Initialize Node and Capacitor
         script: |
+          # 1. Force Node 20 to satisfy Capacitor 6
+          nvm use 20 || nvm install 20
           node -v
-          nvm -v
+          
+          # 2. Install dependencies
           npm install
-
-      - name: Build Web Assets
-        script: |
-          # Ensure a build directory exists for Capacitor
+          
+          # 3. Build Web Assets (Mandatory for Capacitor sync)
           npm run build || (mkdir -p dist && echo "<html></html>" > dist/index.html)
-      - name: Capacitor Setup (Ensure ios folder and Podfile)
-        script: |
-          # 1. Check if ios folder exists, if not, create it
+          
+          # 4. Capacitor Setup
+          # If ios folder is missing, add it. If it exists, sync it.
           if [ ! -d "ios" ]; then
-            echo "iOS directory not found. Adding platform..."
+            echo "Creating iOS platform..."
             npx cap add ios
           fi
-          # 2. Sync to generate the Podfile and copy web assets
+          
+          # Ensure Podfile is generated/updated
           npx cap sync ios
       - name: Cocoapods installation
         script: |
-          # 3. Enter and install
-          cd ios/App && pod install
+          # Navigate to the correct internal directory where Capacitor places the Podfile
+          if [ -d "ios/App" ]; then
+            cd ios/App && pod install
+          else
+            echo "ERROR: ios/App directory not found. Cap add ios must have failed."
+            exit 1
+          fi
       - name: Build and Sign iOS App (Automatic with Manual Fallback)
         script: |
           # 1. Setup API Key for App Store Connect
