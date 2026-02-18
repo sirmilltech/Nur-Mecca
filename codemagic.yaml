@@ -14,8 +14,6 @@ workflows:
       groups:
         - apple_auth
       vars:
-        # FIXED: Use CM_BUILD_NUMBER (integer) instead of CM_BUILD_ID (hex string)
-        BUILD_NUMBER: $CM_BUILD_NUMBER
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
         DEVELOPMENT_TEAM: "JBMD9M6ZPC"
@@ -36,9 +34,11 @@ workflows:
     scripts:
       - name: Set automatic iOS build number
         script: |
-          # Use find to update all project files with the integer build number
-          echo "Setting Build Number to: $BUILD_NUMBER"
-          find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUMBER;/g" {} +
+          # Use CM_BUILD_NUMBER which is always an integer
+          BUILD_NUM=${CM_BUILD_NUMBER:-1}
+          echo "Setting Build Number to: $BUILD_NUM"
+          echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
+          find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
 
       - name: Initialize Environment & Repair iOS Platform
         script: |
@@ -63,7 +63,6 @@ workflows:
 
       - name: Auto-Detect Xcode Paths
         script: |
-          # Dynamically find the workspace and project paths
           DETECTED_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           DETECTED_PROJECT=$(find ios -name "*.xcodeproj" | head -n 1)
           
@@ -87,13 +86,13 @@ workflows:
 
       - name: Patch Info.plist for Missing Bundle ID
         script: |
-          echo "Patching Info.plist to ensure CFBundleIdentifier and integer Version are present..."
+          echo "Patching Info.plist with Build Number: $BUILD_NUMBER"
           PLIST_PATH=$(find ios -name "Info.plist" | grep -v "Pods" | head -n 1)
           if [ -f "$PLIST_PATH" ]; then
             /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$PLIST_PATH"
-            # Ensure CFBundleVersion is also set to the integer build number in the plist
+            # Ensure CFBundleVersion is the integer value, not the variable name
             /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $BUILD_NUMBER" "$PLIST_PATH"
-            echo "Patched $PLIST_PATH"
+            echo "Patched $PLIST_PATH with version $BUILD_NUMBER"
           fi
 
       - name: Resolve Swift Package Dependencies
