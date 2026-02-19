@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Surgical Signing Fix
+    name: Nur-Mecca iOS Final Signing Fix V16
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -17,15 +17,13 @@ workflows:
         XCODE_SCHEME: "App"
         BUNDLE_ID: "com.milltech.nurmecca.app"
         DEVELOPMENT_TEAM: "JBMD9M6ZPC"
-        APP_STORE_CONNECT_KEY_IDENTIFIER: "U2SA5VYGH7"
-        APP_STORE_APP_ID: 6759008303
       node: 20.11.0
       xcode: latest
 
     scripts:
       - name: Increment Build Number
         script: |
-          OFFSET=90
+          OFFSET=100
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
@@ -37,69 +35,65 @@ workflows:
 
       - name: Fetch Signing & Surgical Patch
         script: |
+          # Use the built-in keychain and fetch commands which are more stable
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # Fetch Profile Details
-          PROV_PROFILE_UUID=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "UUID" | head -n 1 | awk '{print $2}')
-          PROV_PROFILE_NAME=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "Name" | head -n 1 | cut -d':' -f2 | xargs)
-          
-          echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
-          echo "PROV_PROFILE_NAME=$PROV_PROFILE_NAME" >> $CM_ENV
-          
-          # V14: DEEP SURGICAL PATCH - Forces settings into every configuration block
+          # V16: Surgical Patch using Python to find the profile dynamically
           python3 -c "
-          import os, sys
-          uuid = '$PROV_PROFILE_UUID'
-          name = '$PROV_PROFILE_NAME'
-          team = '$DEVELOPMENT_TEAM'
+          import os, sys, re, glob
           
-          if not uuid or not name:
-              print('CRITICAL: Profile variables are empty!')
+          # Find the profile downloaded by Codemagic in the standard directory
+          profile_path = glob.glob(os.path.expanduser('~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision'))
+          
+          if not profile_path:
+              print('CRITICAL: No provisioning profile found in Library/MobileDevice!')
               sys.exit(1)
+          
+          # Use the first one found
+          target_profile = profile_path[0]
+          print(f'Detected Profile: {target_profile}')
 
-          for root, dirs, files in os.walk('.'):
+          # Extract UUID from the profile using grep-like logic in Python
+          with open(target_profile, 'rb') as f:
+              p_content = f.read().decode('latin-1')
+              uuid_match = re.search(r'<key>UUID</key>\s*<string>([^<]+)</string>', p_content)
+              name_match = re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', p_content)
+              
+              if not uuid_match:
+                  print('FAILURE: Could not extract UUID from profile.')
+                  sys.exit(1)
+              
+              uuid = uuid_match.group(1)
+              name = name_match.group(1) if name_match else 'Codemagic Profile'
+          
+          print(f'Patching with UUID: {uuid} and Name: {name}')
+
+          def patch_project(file_path):
+              with open(file_path, 'r') as f:
+                  content = f.read()
+              
+              # Force settings
+              content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
+              content = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = {DEVELOPMENT_TEAM};', content)
+              content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
+              content = re.sub(r'PROVISIONING_PROFILE = [^;]+;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
+              content = re.sub(r'CODE_SIGN_IDENTITY = [^;]+;', 'CODE_SIGN_IDENTITY = \"iPhone Distribution\";', content)
+              content = re.sub(r'\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = [^;]+;', '\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"iPhone Distribution\";', content)
+
+              with open(file_path, 'w') as f:
+                  f.write(content)
+
+          for root, dirs, files in os.walk('ios'):
               for file in files:
                   if file == 'project.pbxproj':
-                      path = os.path.join(root, file)
-                      with open(path, 'r') as f: lines = f.readlines()
-                      
-                      new_lines = []
-                      for line in lines:
-                          # 1. Force Style to Manual
-                          if 'ProvisioningStyle =' in line:
-                              new_lines.append(line.replace('Automatic', 'Manual'))
-                          # 2. Inject Team ID
-                          elif 'DEVELOPMENT_TEAM =' in line:
-                              new_lines.append(f'\t\t\t\tDEVELOPMENT_TEAM = {team};\n')
-                          # 3. Inject Profile Specifier (Name)
-                          elif 'PROVISIONING_PROFILE_SPECIFIER =' in line:
-                              new_lines.append(f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n')
-                          # 4. Inject Profile UUID
-                          elif 'PROVISIONING_PROFILE =' in line:
-                              new_lines.append(f'\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";\n')
-                          # 5. Inject Code Sign Identity
-                          elif 'CODE_SIGN_IDENTITY =' in line and '\"iPhone Distribution\"' not in line:
-                              new_lines.append(f'\t\t\t\tCODE_SIGN_IDENTITY = \"iPhone Distribution\";\n')
-                          # 6. Ensure Manual Signing Style
-                          elif 'CODE_SIGN_STYLE =' in line:
-                              new_lines.append(f'\t\t\t\tCODE_SIGN_STYLE = Manual;\n')
-                          else:
-                              new_lines.append(line)
-                      
-                      with open(path, 'w') as f: f.writelines(new_lines)
-                      print(f'V14 deep patch applied to: {path}')
+                      patch_project(os.path.join(root, file))
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
-          
-          # Force export to environment just in case
-          export PROV_PROFILE_NAME="$PROV_PROFILE_NAME"
-          export PROV_PROFILE_UUID="$PROV_PROFILE_UUID"
-
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -107,16 +101,17 @@ workflows:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/ios/xcarchive/App.xcarchive \
-            CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
-            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
+            CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
-            -allowProvisioningUpdates \
+            SKIP_INSTALL=NO \
             clean archive
 
       - name: Export IPA
         script: |
+          # Regenerate export options dynamically based on the actual profile name found
+          PROFILE_NAME=$(python3 -c \"import glob, os, re; p=glob.glob(os.path.expanduser('~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision'))[0]; content=open(p,'rb').read().decode('latin-1'); print(re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', content).group(1))\")
+          
           cat > export_options.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -129,7 +124,7 @@ workflows:
               <key>provisioningProfiles</key>
               <dict>
                   <key>$BUNDLE_ID</key>
-                  <string>$PROV_PROFILE_NAME</string>
+                  <string>$PROFILE_NAME</string>
               </dict>
               <key>signingStyle</key>
               <string>manual</string>
