@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Final Signing Fix V21
+    name: Nur-Mecca iOS Final Signing Fix V22
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -36,6 +36,9 @@ workflows:
       - name: Fetch Signing & Surgical Patch
         script: |
           keychain initialize
+          # Clean old certs that might cause "Unknown Distribution Error"
+          keychain list-certificates
+          
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
@@ -50,10 +53,11 @@ workflows:
               sys.exit(1)
           
           target_profile = profile_path[0]
+          # Extract UUID and Name from the binary plist profile
           with open(target_profile, 'rb') as f:
-              p_content = f.read().decode('latin-1')
-              uuid = re.search(r'<key>UUID</key>\s*<string>([^<]+)</string>', p_content).group(1)
-              name = re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', p_content).group(1)
+              content = f.read().decode('latin-1')
+              uuid = re.search(r'<key>UUID</key>\s*<string>([^<]+)</string>', content).group(1)
+              name = re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', content).group(1)
           
           with open(os.getenv('CM_ENV'), 'a') as env_file:
               env_file.write(f'\nPROVISIONING_UUID={uuid}')
@@ -62,7 +66,7 @@ workflows:
           def patch_project(file_path):
               with open(file_path, 'r') as f:
                   content = f.read()
-              # Force Manual and exact IDs into the project file
+              # Force EVERY target to use the Distribution identity and Team ID
               content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
               content = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = {dev_team};', content)
               content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
@@ -98,7 +102,7 @@ workflows:
 
       - name: Export IPA
         script: |
-          # V21: The "Minimalist" Plist to bypass DistributionMethodManager errors
+          # V22: Explicitly mapping the Provisioning Profile in the Plist
           mkdir -p build/ios/ipa
           cat > export_options.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
@@ -109,15 +113,15 @@ workflows:
               <string>app-store</string>
               <key>teamID</key>
               <string>$DEVELOPMENT_TEAM</string>
+              <key>uploadSymbols</key>
+              <true/>
+              <key>signingStyle</key>
+              <string>manual</string>
               <key>provisioningProfiles</key>
               <dict>
                   <key>$BUNDLE_ID</key>
                   <string>$PROVISIONING_NAME</string>
               </dict>
-              <key>uploadSymbols</key>
-              <true/>
-              <key>thinning</key>
-              <string>&lt;none&gt;</string>
           </dict>
           </plist>
           EOF
