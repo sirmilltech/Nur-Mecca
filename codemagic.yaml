@@ -48,7 +48,7 @@ workflows:
           echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           echo "PROV_PROFILE_NAME=$PROV_PROFILE_NAME" >> $CM_ENV
           
-          # V10 OMEGA: Global attribute injection with clean-slate logic
+          # V11 ZENITH: Precise regex-based injection into Release blocks
           python3 -c "
           import os, re
           uuid = '$PROV_PROFILE_UUID'
@@ -61,38 +61,28 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # 1. Kill Automatic Signing everywhere
+                      # Kill Automatic Signing
                       content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
                       content = re.sub(r'CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;', content)
                       
-                      # 2. Omega Wipe: Remove any existing conflicting keys
-                      keys_to_wipe = ['DEVELOPMENT_TEAM', 'PROVISIONING_PROFILE_SPECIFIER', 'PROVISIONING_PROFILE', 'CODE_SIGN_IDENTITY']
-                      for key in keys_to_wipe:
-                          content = re.sub(f'{key} = .*?;', '', content)
+                      # Target Release build settings specifically
+                      pattern = r'(Release\b.*?buildSettings = \{)'
+                      replacement = r'\1\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";\n\t\t\t\tCODE_SIGN_STYLE = Manual;\n\t\t\t\tCODE_SIGN_IDENTITY = \"iPhone Distribution\";'
                       
-                      # 3. Hard-inject signing into buildSettings
-                      settings_to_inject = [
-                          f'DEVELOPMENT_TEAM = {team};',
-                          f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";',
-                          f'PROVISIONING_PROFILE = \"{uuid}\";',
-                          'CODE_SIGN_STYLE = Manual;',
-                          'CODE_SIGN_IDENTITY = \"iPhone Distribution\";'
-                      ]
+                      content = re.sub(pattern, replacement, content, flags=re.DOTALL)
                       
-                      content = content.replace('buildSettings = {', 'buildSettings = {\n' + '\n'.join([f'\t\t\t\t{s}' for s in settings_to_inject]))
-
-                      # 4. Force main bundle ID
+                      # Force main bundle ID
                       content = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = .*?;', f'PRODUCT_BUNDLE_IDENTIFIER = \"com.milltech.nurmecca.app\";', content)
 
                       with open(path, 'w') as f: f.write(content)
-                      print(f'V10 Omega applied to: {path}')
+                      print(f'V11 Zenith applied to: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # V10 OMEGA: Using explicit PROVISIONING_PROFILE override at the command line level
+          # Zenith Strategy: Pass explicit signing flags and use -destination 'generic/platform=iOS'
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -100,21 +90,43 @@ workflows:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/ios/xcarchive/App.xcarchive \
-            -allowProvisioningUpdates \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
-            PRODUCT_BUNDLE_IDENTIFIER="com.milltech.nurmecca.app" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
             clean archive
 
       - name: Export and Post-Processing
         script: |
+          # Generate the ExportOptions.plist manually to ensure absolute alignment
+          cat > export_options.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store</string>
+              <key>teamID</key>
+              <string>$DEVELOPMENT_TEAM</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>$BUNDLE_ID</key>
+                  <string>$PROV_PROFILE_NAME</string>
+              </dict>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>signingCertificate</key>
+              <string>iPhone Distribution</string>
+          </dict>
+          </plist>
+          EOF
+
           xcodebuild -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -exportPath build/ios/ipa \
-            -exportOptionsPlist /Users/builder/export_options.plist
+            -exportOptionsPlist export_options.plist
 
     artifacts:
       - build/ios/ipa/*.ipa
