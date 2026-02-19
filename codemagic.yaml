@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Final Fix V29
+    name: Nur-Mecca iOS Final Fix V30
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -23,8 +23,7 @@ workflows:
     scripts:
       - name: Increment Build Number
         script: |
-          # Robust version incrementing for project files
-          OFFSET=200
+          OFFSET=300
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
@@ -34,9 +33,10 @@ workflows:
           npm install --ignore-scripts
           npx cap sync ios
 
-      - name: Fetch Signing & Hard-Patch Project
+      - name: Fetch Signing & Global Certificate Injection
         script: |
           keychain initialize
+          # Fetch specifically for APP_STORE
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
@@ -45,6 +45,7 @@ workflows:
           
           profile_path = glob.glob(os.path.expanduser('~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision'))
           if not profile_path:
+              print('No profile found')
               sys.exit(1)
           
           with open(profile_path[0], 'rb') as f:
@@ -56,24 +57,30 @@ workflows:
               env_file.write(f'\nPROVISIONING_UUID={uuid}')
               env_file.write(f'\nPROVISIONING_NAME={name}')
 
-          def patch(file_path):
+          def deep_patch(file_path):
               with open(file_path, 'r') as f:
                   text = f.read()
+              # Force Manual Signing and set the Team/Profile globally
               text = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', text)
               text = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = \"JBMD9M6ZPC\";', text)
               text = re.sub(r'PROVISIONING_PROFILE = [^;]+;', f'PROVISIONING_PROFILE = \"{uuid}\";', text)
+              text = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', text)
+              # Force Code Sign Identity to Distribution to avoid 'iOS Development' errors
+              text = re.sub(r'CODE_SIGN_IDENTITY = \"[^\"]+\";', 'CODE_SIGN_IDENTITY = \"iPhone Distribution\";', text)
+              text = re.sub(r'\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = \"[^\"]+\";', '\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"iPhone Distribution\";', text)
               with open(file_path, 'w') as f:
                   f.write(text)
 
           for root, dirs, files in os.walk('ios'):
               for file in files:
                   if file == 'project.pbxproj':
-                      patch(os.path.join(root, file))
+                      deep_patch(os.path.join(root, file))
           "
 
       - name: Build and Archive
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
+          # Explicitly passing CODE_SIGN_IDENTITY here overrides the default 'iOS Development' check
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -82,28 +89,24 @@ workflows:
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE="$PROVISIONING_UUID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_NAME" \
+            CODE_SIGN_IDENTITY="iPhone Distribution" \
             archive
 
       - name: Export IPA
         script: |
           mkdir -p build/ios/ipa
-          
-          # V29: Minimalist Plist (Bypasses the 'expected one' validation error)
-          # We remove signingStyle and let Xcode infer it from the Archive.
           python3 -c "
           import plistlib
-          import os
           data = {
               'method': 'app-store',
               'teamID': 'JBMD9M6ZPC',
               'uploadSymbols': True,
-              'uploadBitcode': False,
               'manageAppVersionAndBuildNumber': False
           }
           with open('export_options.plist', 'wb') as f:
               plistlib.dump(data, f)
           "
-
           xcodebuild -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -exportPath build/ios/ipa \
