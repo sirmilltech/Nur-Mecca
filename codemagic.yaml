@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Automatic Build
+    name: Nur-Mecca iOS Universal Signing Fix
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -18,68 +18,63 @@ workflows:
         BUNDLE_ID: "com.milltech.nurmecca.app"
         DEVELOPMENT_TEAM: "JBMD9M6ZPC"
         APP_STORE_CONNECT_KEY_IDENTIFIER: "U2SA5VYGH7"
-        APP_STORE_APP_ID: 6759008303
       node: 20.11.0
       xcode: latest
 
-    triggering:
-      events:
-        - push
-      branch_patterns:
-        - pattern: develop
-          include: true
-        - pattern: main
-          include: true
-
     scripts:
-      - name: Set automatic iOS build number
+      - name: Increment Build Number
         script: |
-          OFFSET=15 
+          OFFSET=25
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
 
-      - name: Initialize Environment & Repair iOS Platform
+      - name: Initialize Environment
         script: |
           npm install --ignore-scripts
-          mkdir -p www
-          if [ ! -f "www/index.html" ]; then echo "<html><body>Nur-Mecca CI</body></html>" > www/index.html; fi
-          cat <<EOF > capacitor.config.json
-          { "appId": "$BUNDLE_ID", "appName": "Nur-Mecca", "webDir": "www", "bundledWebRuntime": false }
-          EOF
           npx cap sync ios
 
-      - name: Set up Code Signing
+      - name: Fetch and Prepare Signing
         script: |
           keychain initialize
-          # This command fetches the profile and gives us the UUID
-          PROFILES_DATA=$(app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create)
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # Export the Profile UUID so we can force xcodebuild to use it
+          # Find the exact UUID of the profile we just downloaded
           PROV_PROFILE=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "UUID" | head -n 1 | awk '{print $2}')
+          echo "Using Provisioning Profile UUID: $PROV_PROFILE"
           echo "PROVISIONING_PROFILE_UUID=$PROV_PROFILE" >> $CM_ENV
 
-      - name: Force Project Signing Config
+      - name: Universal Project Patch (Injection)
         script: |
-          XCODE_PROJECT=$(find ios -name "*.xcodeproj" | head -n 1)
-          PBXPROJ="$XCODE_PROJECT/project.pbxproj"
+          # This Python script forces EVERY target to use our specific profile
+          python3 -c "
+          import os, re
+          target_uuid = os.environ['PROVISIONING_PROFILE_UUID']
+          team_id = os.environ['DEVELOPMENT_TEAM']
           
-          # Force Manual signing so Xcode doesn't look for an 'Account' (Apple ID)
-          sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
-          sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
-          
-          # Patch Info.plist for the icon requirement
-          find ios -name "Info.plist" | while read PLIST_PATH; do
-            /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$PLIST_PATH" || true
-            /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$PLIST_PATH"
-          done
+          for root, dirs, files in os.walk('.'):
+              for file in files:
+                  if file == 'project.pbxproj':
+                      path = os.path.join(root, file)
+                      with open(path, 'r') as f: content = f.read()
+                      
+                      # Force Manual Signing Style
+                      content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
+                      # Inject Team ID
+                      content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team_id};', content)
+                      # Inject Profile UUID
+                      content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{target_uuid}\";', content)
+                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{target_uuid}\";', content)
+                      
+                      with open(path, 'w') as f: f.write(content)
+                      print(f'Patched: {path}')
+          "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # We pass the signing details directly into the build command
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -101,16 +96,10 @@ workflows:
           IPA_PATH=$(find build/ios/ipa -name "*.ipa")
           unzip -q "$IPA_PATH" -d temp_ipa
           APP_PATH=$(find temp_ipa/Payload -name "*.app")
-          PLIST="$APP_PATH/Info.plist"
-          
-          /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$PLIST" || true
-          /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$PLIST"
-          
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$APP_PATH/Info.plist" || /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$APP_PATH/Info.plist"
           /usr/bin/codesign --force --sign "Apple Distribution" "$APP_PATH"
-          
           cd temp_ipa && zip -qr ../App_Fixed.ipa . && cd ..
           mv App_Fixed.ipa "$IPA_PATH"
-          rm -rf temp_ipa
 
     artifacts:
       - build/ios/ipa/*.ipa
