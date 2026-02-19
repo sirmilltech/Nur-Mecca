@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Final Signing Fix V18
+    name: Nur-Mecca iOS Final Signing Fix V19
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -39,7 +39,6 @@ workflows:
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # V18: Export the UUID and Name to environment variables for the build step
           python3 -c "
           import os, sys, re, glob
           
@@ -56,7 +55,6 @@ workflows:
               uuid = re.search(r'<key>UUID</key>\s*<string>([^<]+)</string>', p_content).group(1)
               name = re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', p_content).group(1)
           
-          # Write to Codemagic environment so xcodebuild can use them
           with open(os.getenv('CM_ENV'), 'a') as env_file:
               env_file.write(f'\nPROVISIONING_UUID={uuid}')
               env_file.write(f'\nPROVISIONING_NAME={name}')
@@ -81,8 +79,6 @@ workflows:
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
-          
-          # V18 Force override: passing UUID and PROVISIONING_PROFILE directly to xcodebuild
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -100,6 +96,8 @@ workflows:
 
       - name: Export IPA
         script: |
+          # V19 Fix: Precise Export Options for Manual Signing
+          mkdir -p build/ios/ipa
           cat > export_options.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -109,15 +107,21 @@ workflows:
               <string>app-store</string>
               <key>teamID</key>
               <string>$DEVELOPMENT_TEAM</string>
+              <key>uploadBitcode</key>
+              <false/>
+              <key>compileBitcode</key>
+              <false/>
+              <key>uploadSymbols</key>
+              <true/>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>signingCertificate</key>
+              <string>iPhone Distribution</string>
               <key>provisioningProfiles</key>
               <dict>
                   <key>$BUNDLE_ID</key>
                   <string>$PROVISIONING_NAME</string>
               </dict>
-              <key>signingStyle</key>
-              <string>manual</string>
-              <key>signingCertificate</key>
-              <string>iPhone Distribution</string>
           </dict>
           </plist>
           EOF
@@ -126,7 +130,7 @@ workflows:
             -archivePath build/ios/xcarchive/App.xcarchive \
             -exportPath build/ios/ipa \
             -exportOptionsPlist export_options.plist
-
+            
     artifacts:
       - build/ios/ipa/*.ipa
 
