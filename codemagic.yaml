@@ -18,6 +18,7 @@ workflows:
         BUNDLE_ID: "com.milltech.nurmecca.app"
         DEVELOPMENT_TEAM: "JBMD9M6ZPC"
         APP_STORE_CONNECT_KEY_IDENTIFIER: "U2SA5VYGH7"
+        APP_STORE_APP_ID: 6759008303
       node: 20.11.0
       xcode: latest
 
@@ -60,15 +61,16 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # 1. Force Manual Style for all configurations
+                      # 1. Force Manual Style for all configurations and targets
                       content = re.sub(r'ProvisioningStyle = \w+;', 'ProvisioningStyle = Manual;', content)
                       
-                      # 2. Inject Team ID
+                      # 2. Inject Team ID everywhere
                       content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team_id};', content)
                       
-                      # 3. Force the specific Profile UUID into every possible slot
+                      # 3. Force the specific Profile UUID and disable automatic enrollment
                       content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{target_uuid}\";', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{target_uuid}\";', content)
+                      content = re.sub(r'CODE_SIGN_STYLE = .*?;', 'CODE_SIGN_STYLE = Manual;', content)
                       
                       # 4. Ensure SKIP_INSTALL is handled correctly
                       content = re.sub(r'SKIP_INSTALL = YES;', 'SKIP_INSTALL = NO;', content)
@@ -81,8 +83,8 @@ workflows:
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # Explicitly passing signing flags as environment variables AND command line arguments
-          # to force Xcode to ignore the project's cached (and potentially broken) signing settings
+          # We use generic signing arguments to override the target-specific settings
+          # that the logs indicated were still requiring a profile.
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
