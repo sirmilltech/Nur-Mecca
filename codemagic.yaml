@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Final Signing Fix V19
+    name: Nur-Mecca iOS Final Signing Fix V20
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -96,8 +96,10 @@ workflows:
 
       - name: Export IPA
         script: |
-          # V19 Fix: Precise Export Options for Manual Signing
+          # V20 Fix: Using allowProvisioningUpdates to let Xcode handle the Plist logic automatically
           mkdir -p build/ios/ipa
+          
+          # Simplified Plist that forces Xcode to resolve the signing itself
           cat > export_options.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -107,21 +109,12 @@ workflows:
               <string>app-store</string>
               <key>teamID</key>
               <string>$DEVELOPMENT_TEAM</string>
-              <key>uploadBitcode</key>
-              <false/>
-              <key>compileBitcode</key>
-              <false/>
               <key>uploadSymbols</key>
               <true/>
+              <key>manageAppVersionAndBuildNumber</key>
+              <true/>
               <key>signingStyle</key>
-              <string>manual</string>
-              <key>signingCertificate</key>
-              <string>iPhone Distribution</string>
-              <key>provisioningProfiles</key>
-              <dict>
-                  <key>$BUNDLE_ID</key>
-                  <string>$PROVISIONING_NAME</string>
-              </dict>
+              <string>automatic</string>
           </dict>
           </plist>
           EOF
@@ -129,7 +122,8 @@ workflows:
           xcodebuild -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -exportPath build/ios/ipa \
-            -exportOptionsPlist export_options.plist
+            -exportOptionsPlist export_options.plist \
+            -allowProvisioningUpdates
             
     artifacts:
       - build/ios/ipa/*.ipa
