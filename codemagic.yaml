@@ -99,13 +99,28 @@ workflows:
       - name: Global Info.plist Patching
         script: |
           # Find all Info.plist files and inject CFBundleIconName
-          # We force it into the main App folder specifically as well
           find ios -name "Info.plist" | while read PLIST_PATH; do
             echo "Patching $PLIST_PATH"
             /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$PLIST_PATH" || true
             /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$PLIST_PATH"
             /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST_PATH" || echo "Skipping identifier for $PLIST_PATH"
           done
+
+      - name: Pre-Archive Plist Enforcement
+        script: |
+          # Target the primary App Info.plist specifically and use sed as a failover
+          TARGET_PLIST="ios/App/App/Info.plist"
+          if [ -f "$TARGET_PLIST" ]; then
+             echo "Applying hard-coded fix to $TARGET_PLIST"
+             /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$TARGET_PLIST" || true
+             /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$TARGET_PLIST"
+             
+             # Fallback: if the file is in XML format and PlistBuddy missed a spot, 
+             # use sed to insert it before the last </dict>
+             sed -i '' '/<\/dict>/i \
+             <key>CFBundleIconName<\/key> \
+             <string>AppIcon<\/string>' "$TARGET_PLIST"
+          fi
 
       - name: Resolve Swift Package Dependencies
         script: |
