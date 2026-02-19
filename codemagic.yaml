@@ -48,7 +48,7 @@ workflows:
           echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           echo "PROV_PROFILE_NAME=$PROV_PROFILE_NAME" >> $CM_ENV
           
-          # NUCLEAR SCRIPT V4: Total TargetAttributes and Build Settings Overwrite
+          # NUCLEAR SCRIPT V5: Forced Attribute Injection
           python3 -c "
           import os, re
           uuid = '$PROV_PROFILE_UUID'
@@ -61,33 +61,32 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # 1. Kill all ProvisioningStyle attributes in the TargetAttributes section
-                      content = re.sub(r'ProvisioningStyle = .*?;', '', content)
+                      # 1. Force ProvisioningStyle to Manual for ALL targets in Attributes
+                      content = re.sub(r'ProvisioningStyle = .*?;', 'ProvisioningStyle = Manual;', content)
                       
-                      # 2. Force Global Build Settings to Manual
+                      # 2. Add ProvisioningStyle if missing in TargetAttributes
+                      if 'TargetAttributes' in content and 'ProvisioningStyle' not in content:
+                           content = content.replace('TargetAttributes = {', 'TargetAttributes = {\n\t\t\t\t\tProvisioningStyle = Manual;')
+
+                      # 3. Global Build Settings Overwrite
                       content = re.sub(r'CODE_SIGN_STYLE = .*?;', 'CODE_SIGN_STYLE = Manual;', content)
                       content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team};', content)
-                      
-                      # 3. Replace/Inject Provisioning Profile details everywhere
-                      # This ensures the 'App' target is explicitly covered
                       content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
                       
-                      # 4. Fallback: If for some reason the keys don't exist in the target, inject them after CODE_SIGN_IDENTITY
-                      # This targets the specific issue where 'App' target needs a profile but doesn't have a specifier key yet
-                      if 'PROVISIONING_PROFILE_SPECIFIER' not in content:
-                          content = content.replace('CODE_SIGN_IDENTITY = \"iPhone Distribution\";', 
-                                                 f'CODE_SIGN_IDENTITY = \"iPhone Distribution\";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";\n\t\t\t\tDEVELOPMENT_TEAM = {team};')
+                      # 4. Target Specific Injection: Find App target and force settings
+                      # We look for the App build settings block specifically
+                      content = content.replace('PRODUCT_NAME = App;', f'PRODUCT_NAME = App;\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";\n\t\t\t\tDEVELOPMENT_TEAM = {team};')
 
                       with open(path, 'w') as f: f.write(content)
-                      print(f'Nuclear V4 (Ultimate) applied to: {path}')
+                      print(f'Nuclear V5 (Final Strike) applied to: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # We add -allowProvisioningUpdates but emphasize the Manual flags in the command line
+          # Explicitly pass all variables again via command line to override cached project data
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -99,8 +98,6 @@ workflows:
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
-            CODE_SIGN_ALLOW_CONSTANT_SIGNING_EXAMINATION=YES \
-            COMPILER_INDEX_STORE_ENABLE=NO \
             archive
 
       - name: Export and Post-Processing
