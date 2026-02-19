@@ -25,7 +25,7 @@ workflows:
     scripts:
       - name: Increment Build Number
         script: |
-          OFFSET=75
+          OFFSET=80
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
@@ -41,15 +41,18 @@ workflows:
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # Extract the UUID and Name of the profile
+          # Extract Profile UUID and Name
           PROV_PROFILE_UUID=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "UUID" | head -n 1 | awk '{print $2}')
-          echo "Hard-patching project with Profile UUID: $PROV_PROFILE_UUID"
-          echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
+          PROV_PROFILE_NAME=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "Name" | head -n 1 | cut -d':' -f2 | xargs)
           
-          # NUCLEAR SCRIPT V2: Targets the TargetAttributes and Build Settings specifically
+          echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
+          echo "PROV_PROFILE_NAME=$PROV_PROFILE_NAME" >> $CM_ENV
+          
+          # NUCLEAR SCRIPT V3: Explicitly wipes ProvisioningStyle from TargetAttributes
           python3 -c "
           import os, re
           uuid = '$PROV_PROFILE_UUID'
+          name = '$PROV_PROFILE_NAME'
           team = '$DEVELOPMENT_TEAM'
           
           for root, dirs, files in os.walk('.'):
@@ -58,29 +61,29 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # 1. Force Manual Style globally in attributes
-                      content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
+                      # 1. Strip the ProvisioningStyle entirely (Forces Xcode to look at Build Settings only)
+                      content = content.replace('ProvisioningStyle = Automatic;', '')
+                      content = content.replace('ProvisioningStyle = Manual;', '')
                       
-                      # 2. Inject/Overwrite Build Settings
+                      # 2. Hard-set Manual Style in Build Settings
                       content = re.sub(r'CODE_SIGN_STYLE = .*?;', 'CODE_SIGN_STYLE = Manual;', content)
                       content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team};', content)
                       content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
-                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{uuid}\";', content)
+                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
                       
-                      # 3. Handle cases where the keys don't exist yet (Injection)
+                      # 3. Ensure keys exist
                       if 'PROVISIONING_PROFILE_SPECIFIER' not in content:
                           content = content.replace('CODE_SIGN_IDENTITY = \"iPhone Distribution\";', 
-                                                 f'CODE_SIGN_IDENTITY = \"iPhone Distribution\";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{uuid}\";\n\t\t\t\tDEVELOPMENT_TEAM = {team};')
+                                                 f'CODE_SIGN_IDENTITY = \"iPhone Distribution\";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n\t\t\t\tDEVELOPMENT_TEAM = {team};')
 
                       with open(path, 'w') as f: f.write(content)
-                      print(f'Nuclear Patch Applied to: {path}')
+                      print(f'Nuclear V3 applied to: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # Added COMPILER_INDEX_STORE_ENABLE=NO to prevent background indexer interference
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -90,8 +93,7 @@ workflows:
             -allowProvisioningUpdates \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
-            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
             CODE_SIGN_ALLOW_CONSTANT_SIGNING_EXAMINATION=YES \
             COMPILER_INDEX_STORE_ENABLE=NO \
