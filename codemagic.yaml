@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Export Fix V25
+    name: Nur-Mecca iOS Export Fix V26
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -110,28 +110,26 @@ workflows:
         script: |
           mkdir -p build/ios/ipa
           
-          # V25: Using printf for a cleaner, safer XML generation
-          printf '<?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store</string>
-              <key>teamID</key>
-              <string>%s</string>
-              <key>provisioningProfiles</key>
-              <dict>
-                  <key>%s</key>
-                  <string>%s</string>
-              </dict>
-              <key>signingStyle</key>
-              <string>manual</string>
-              <key>stripSwiftSymbols</key>
-              <true/>
-              <key>uploadSymbols</key>
-              <true/>
-          </dict>
-          </plist>' "$DEVELOPMENT_TEAM" "$BUNDLE_ID" "$PROVISIONING_NAME" > export_options.plist
+          # V26: Python-native Plist generation (Immune to shell character bugs)
+          python3 -c "
+          import plistlib
+          import os
+
+          data = {
+              'method': 'app-store',
+              'teamID': os.environ['DEVELOPMENT_TEAM'],
+              'provisioningProfiles': {
+                  os.environ['BUNDLE_ID']: os.environ['PROVISIONING_NAME']
+              },
+              'signingStyle': 'manual',
+              'stripSwiftSymbols': True,
+              'uploadSymbols': True,
+              'manageAppVersionAndBuildNumber': False
+          }
+
+          with open('export_options.plist', 'wb') as f:
+              plistlib.dump(data, f)
+          "
 
           xcodebuild -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
