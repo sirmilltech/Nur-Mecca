@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Final Signing Fix V16
+    name: Nur-Mecca iOS Final Signing Fix V17
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -35,48 +35,45 @@ workflows:
 
       - name: Fetch Signing & Surgical Patch
         script: |
-          # Use the built-in keychain and fetch commands which are more stable
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # V16: Surgical Patch using Python to find the profile dynamically
+          # V17: Fixed Python Variable Scope
           python3 -c "
           import os, sys, re, glob
           
-          # Find the profile downloaded by Codemagic in the standard directory
+          # Pass environment variables into Python
+          dev_team = os.getenv('DEVELOPMENT_TEAM', 'JBMD9M6ZPC')
+          
           profile_path = glob.glob(os.path.expanduser('~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision'))
           
           if not profile_path:
-              print('CRITICAL: No provisioning profile found in Library/MobileDevice!')
+              print('CRITICAL: No provisioning profile found!')
               sys.exit(1)
           
-          # Use the first one found
           target_profile = profile_path[0]
-          print(f'Detected Profile: {target_profile}')
-
-          # Extract UUID from the profile using grep-like logic in Python
           with open(target_profile, 'rb') as f:
               p_content = f.read().decode('latin-1')
               uuid_match = re.search(r'<key>UUID</key>\s*<string>([^<]+)</string>', p_content)
               name_match = re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', p_content)
               
               if not uuid_match:
-                  print('FAILURE: Could not extract UUID from profile.')
+                  print('FAILURE: Could not extract UUID.')
                   sys.exit(1)
               
               uuid = uuid_match.group(1)
               name = name_match.group(1) if name_match else 'Codemagic Profile'
           
-          print(f'Patching with UUID: {uuid} and Name: {name}')
+          print(f'Patching with Team: {dev_team}, UUID: {uuid}, Name: {name}')
 
           def patch_project(file_path):
               with open(file_path, 'r') as f:
                   content = f.read()
               
-              # Force settings
+              # Use the dev_team variable we defined at the top
               content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
-              content = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = {DEVELOPMENT_TEAM};', content)
+              content = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = {dev_team};', content)
               content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
               content = re.sub(r'PROVISIONING_PROFILE = [^;]+;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
               content = re.sub(r'CODE_SIGN_IDENTITY = [^;]+;', 'CODE_SIGN_IDENTITY = \"iPhone Distribution\";', content)
@@ -109,7 +106,6 @@ workflows:
 
       - name: Export IPA
         script: |
-          # Regenerate export options dynamically based on the actual profile name found
           PROFILE_NAME=$(python3 -c \"import glob, os, re; p=glob.glob(os.path.expanduser('~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision'))[0]; content=open(p,'rb').read().decode('latin-1'); print(re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', content).group(1))\")
           
           cat > export_options.plist <<EOF
