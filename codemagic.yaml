@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Final Fix V30
+    name: Nur-Mecca iOS Final Fix V31
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -36,7 +36,6 @@ workflows:
       - name: Fetch Signing & Global Certificate Injection
         script: |
           keychain initialize
-          # Fetch specifically for APP_STORE
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
@@ -60,12 +59,11 @@ workflows:
           def deep_patch(file_path):
               with open(file_path, 'r') as f:
                   text = f.read()
-              # Force Manual Signing and set the Team/Profile globally
               text = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', text)
               text = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = \"JBMD9M6ZPC\";', text)
               text = re.sub(r'PROVISIONING_PROFILE = [^;]+;', f'PROVISIONING_PROFILE = \"{uuid}\";', text)
               text = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', text)
-              # Force Code Sign Identity to Distribution to avoid 'iOS Development' errors
+              text = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = [^;]+;', f'PRODUCT_BUNDLE_IDENTIFIER = \"com.milltech.nurmecca.app\";', text)
               text = re.sub(r'CODE_SIGN_IDENTITY = \"[^\"]+\";', 'CODE_SIGN_IDENTITY = \"iPhone Distribution\";', text)
               text = re.sub(r'\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = \"[^\"]+\";', '\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"iPhone Distribution\";', text)
               with open(file_path, 'w') as f:
@@ -80,7 +78,6 @@ workflows:
       - name: Build and Archive
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
-          # Explicitly passing CODE_SIGN_IDENTITY here overrides the default 'iOS Development' check
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -91,6 +88,7 @@ workflows:
             PROVISIONING_PROFILE="$PROVISIONING_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_NAME" \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             archive
 
       - name: Export IPA
@@ -102,7 +100,8 @@ workflows:
               'method': 'app-store',
               'teamID': 'JBMD9M6ZPC',
               'uploadSymbols': True,
-              'manageAppVersionAndBuildNumber': False
+              'manageAppVersionAndBuildNumber': False,
+              'provisioningProfiles': {'com.milltech.nurmecca.app': os.getenv('PROVISIONING_NAME')}
           }
           with open('export_options.plist', 'wb') as f:
               plistlib.dump(data, f)
