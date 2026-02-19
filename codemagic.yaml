@@ -24,7 +24,7 @@ workflows:
     scripts:
       - name: Increment Build Number
         script: |
-          OFFSET=25
+          OFFSET=30
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
@@ -34,42 +34,44 @@ workflows:
           npm install --ignore-scripts
           npx cap sync ios
 
-      - name: Fetch and Prepare Signing
+      - name: Fetch Signing & Patch Project
         script: |
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # Find the exact UUID of the profile we just downloaded
-          PROV_PROFILE=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "UUID" | head -n 1 | awk '{print $2}')
-          echo "Using Provisioning Profile UUID: $PROV_PROFILE"
-          echo "PROVISIONING_PROFILE_UUID=$PROV_PROFILE" >> $CM_ENV
-
-      - name: Universal Project Patch (Injection)
-        script: |
-          # This Python script forces EVERY target to use our specific profile
+          # 1. Extract UUID to a local variable
+          PROV_PROFILE_UUID=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "UUID" | head -n 1 | awk '{print $2}')
+          echo "Found Profile UUID: $PROV_PROFILE_UUID"
+          
+          # 2. Pass it directly to Python via local environment
+          export PROVISIONING_PROFILE_UUID=$PROV_PROFILE_UUID
+          
           python3 -c "
           import os, re
-          target_uuid = os.environ['PROVISIONING_PROFILE_UUID']
-          team_id = os.environ['DEVELOPMENT_TEAM']
+          target_uuid = os.getenv('PROVISIONING_PROFILE_UUID')
+          team_id = os.getenv('DEVELOPMENT_TEAM')
           
+          if not target_uuid:
+              print('Error: UUID not found in environment')
+              exit(1)
+
           for root, dirs, files in os.walk('.'):
               for file in files:
                   if file == 'project.pbxproj':
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # Force Manual Signing Style
                       content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
-                      # Inject Team ID
                       content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team_id};', content)
-                      # Inject Profile UUID
                       content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{target_uuid}\";', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{target_uuid}\";', content)
                       
                       with open(path, 'w') as f: f.write(content)
-                      print(f'Patched: {path}')
+                      print(f'Successfully injected UUID {target_uuid} into {path}')
           "
+          # Export for the actual Build step
+          echo "PROVISIONING_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
 
       - name: Build and Archive iOS App
         script: |
