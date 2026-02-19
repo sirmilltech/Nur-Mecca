@@ -48,7 +48,7 @@ workflows:
           echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           echo "PROV_PROFILE_NAME=$PROV_PROFILE_NAME" >> $CM_ENV
           
-          # NUCLEAR SCRIPT V5: Forced Attribute Injection
+          # NUCLEAR SCRIPT V6: Deep Attribute Deletion & Manual Override
           python3 -c "
           import os, re
           uuid = '$PROV_PROFILE_UUID'
@@ -61,38 +61,38 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # 1. Force ProvisioningStyle to Manual for ALL targets in Attributes
-                      content = re.sub(r'ProvisioningStyle = .*?;', 'ProvisioningStyle = Manual;', content)
+                      # 1. Force ProvisioningStyle to Manual everywhere in the TargetAttributes block
+                      content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
                       
-                      # 2. Add ProvisioningStyle if missing in TargetAttributes
-                      if 'TargetAttributes' in content and 'ProvisioningStyle' not in content:
-                           content = content.replace('TargetAttributes = {', 'TargetAttributes = {\n\t\t\t\t\tProvisioningStyle = Manual;')
+                      # 2. Add ProvisioningStyle = Manual if missing in any TargetAttributes entry
+                      # This regex finds target IDs in the attributes section and ensures they are set to Manual
+                      content = re.sub(r'([A-Z0-9]{24} = \{[^\}]*?)(?!\s*ProvisioningStyle)', r'\1\n\t\t\t\t\tProvisioningStyle = Manual;', content)
 
-                      # 3. Global Build Settings Overwrite
+                      # 3. Global Build Settings Overwrite (Force Manual for all Build Configurations)
                       content = re.sub(r'CODE_SIGN_STYLE = .*?;', 'CODE_SIGN_STYLE = Manual;', content)
                       content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team};', content)
                       content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
                       
-                      # 4. Target Specific Injection: Find App target and force settings
-                      # We look for the App build settings block specifically
+                      # 4. Target Specific Injection for the 'App' target
                       content = content.replace('PRODUCT_NAME = App;', f'PRODUCT_NAME = App;\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";\n\t\t\t\tDEVELOPMENT_TEAM = {team};')
 
                       with open(path, 'w') as f: f.write(content)
-                      print(f'Nuclear V5 (Final Strike) applied to: {path}')
+                      print(f'Nuclear V6 (The Lockdown) applied to: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # Explicitly pass all variables again via command line to override cached project data
+          # Passing -allowProvisioningUpdates as a backup for the manual settings
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
             -sdk iphoneos \
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
+            -allowProvisioningUpdates \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
