@@ -82,19 +82,15 @@ workflows:
             sed -i '' "s/PRODUCT_BUNDLE_IDENTIFIER = [^;]*;/PRODUCT_BUNDLE_IDENTIFIER = $BUNDLE_ID;/g" "$PBXPROJ"
           fi
 
-      - name: Patch Info.plist for Versioning and Icons
+      - name: Global Info.plist Patching
         script: |
-          PLIST_PATH=$(find ios -name "Info.plist" | grep -v "Pods" | head -n 1)
-          if [ -f "$PLIST_PATH" ]; then
-            echo "Patching Info.plist at $PLIST_PATH"
-            /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$PLIST_PATH"
-            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $BUILD_NUMBER" "$PLIST_PATH"
-            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.0.0" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.0.0" "$PLIST_PATH"
-            
-            # Fix for "Missing CFBundleIconName" error
-            # This points the build to the 'AppIcon' asset in your Assets.xcassets folder
+          # Find all Info.plist files and inject CFBundleIconName
+          # This ensures that even if Capacitor or a Pod has a secondary plist, the validation passes.
+          find ios -name "Info.plist" | while read PLIST_PATH; do
+            echo "Patching $PLIST_PATH"
             /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$PLIST_PATH"
-          fi
+            /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST_PATH" || echo "Skipping identifier for $PLIST_PATH"
+          done
 
       - name: Resolve Swift Package Dependencies
         script: |
