@@ -34,16 +34,10 @@ workflows:
     scripts:
       - name: Set automatic iOS build number
         script: |
-          # Use CM_BUILD_NUMBER and add an offset to avoid "Redundant Binary Upload"
-          # If your last successful build was 1, set OFFSET to 1. 
-          # This will make the next build (1 + 1) = 2.
-          OFFSET=5 
-          BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
-          
-          echo "Setting Build Number to: $BUILD_NUM (CM_BUILD_NUMBER: $CM_BUILD_NUMBER + Offset: $OFFSET)"
-          echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
-          
-          find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
+          echo "Using Codemagic Build Number: $CM_BUILD_NUMBER"
+          echo "BUILD_NUMBER=$CM_BUILD_NUMBER" >> $CM_ENV
+
+          find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $CM_BUILD_NUMBER;/g" {} +
 
       - name: Initialize Environment & Repair iOS Platform
         script: |
