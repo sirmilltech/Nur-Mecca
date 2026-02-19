@@ -48,7 +48,7 @@ workflows:
           echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           echo "PROV_PROFILE_NAME=$PROV_PROFILE_NAME" >> $CM_ENV
           
-          # NUCLEAR SCRIPT V6: Deep Attribute Deletion & Manual Override
+          # NUCLEAR SCRIPT V7: Deep Attribute Deletion & Manual Override
           python3 -c "
           import os, re
           uuid = '$PROV_PROFILE_UUID'
@@ -61,36 +61,36 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # 1. Force ProvisioningStyle to Manual everywhere in the TargetAttributes block
+                      # 1. Force ProvisioningStyle to Manual
                       content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
                       
-                      # 2. Add ProvisioningStyle = Manual if missing in any TargetAttributes entry
-                      # This regex finds target IDs in the attributes section and ensures they are set to Manual
+                      # 2. Add ProvisioningStyle = Manual if missing
                       content = re.sub(r'([A-Z0-9]{24} = \{[^\}]*?)(?!\s*ProvisioningStyle)', r'\1\n\t\t\t\t\tProvisioningStyle = Manual;', content)
 
-                      # 3. Global Build Settings Overwrite (Force Manual for all Build Configurations)
+                      # 3. Global Build Settings Overwrite
                       content = re.sub(r'CODE_SIGN_STYLE = .*?;', 'CODE_SIGN_STYLE = Manual;', content)
                       content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team};', content)
                       content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
                       
-                      # 4. Target Specific Injection for the 'App' target
+                      # 4. Target Specific Injection
                       content = content.replace('PRODUCT_NAME = App;', f'PRODUCT_NAME = App;\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";\n\t\t\t\tDEVELOPMENT_TEAM = {team};')
 
                       with open(path, 'w') as f: f.write(content)
-                      print(f'Nuclear V6 (The Lockdown) applied to: {path}')
+                      print(f'Nuclear V7 Protocol applied to: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # Passing -allowProvisioningUpdates as a backup for the manual settings
+          # OMEGA PROTOCOL: Forced mapping during xcodebuild
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
             -sdk iphoneos \
             -configuration Release \
+            -destination 'generic/platform=iOS' \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -allowProvisioningUpdates \
             CODE_SIGN_STYLE=Manual \
@@ -98,6 +98,7 @@ workflows:
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
             archive
 
       - name: Export and Post-Processing
