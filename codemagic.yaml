@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Export Fix V26
+    name: Nur-Mecca iOS Export Fix V27
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -110,7 +110,8 @@ workflows:
         script: |
           mkdir -p build/ios/ipa
           
-          # V26: Python-native Plist generation (Immune to shell character bugs)
+          # V27: Binary Plist Generation
+          # This creates the file in Apple's native binary format, which xcodebuild cannot misread.
           python3 -c "
           import plistlib
           import os
@@ -124,11 +125,12 @@ workflows:
               'signingStyle': 'manual',
               'stripSwiftSymbols': True,
               'uploadSymbols': True,
-              'manageAppVersionAndBuildNumber': False
+              'compileBitcode': False
           }
 
           with open('export_options.plist', 'wb') as f:
-              plistlib.dump(data, f)
+              # FMT_BINARY ensures no XML encoding issues
+              plistlib.dump(data, f, fmt=plistlib.FMT_BINARY)
           "
 
           xcodebuild -exportArchive \
