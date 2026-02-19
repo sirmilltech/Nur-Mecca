@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Final Signing Fix V22
+    name: Nur-Mecca iOS Final Signing Fix V23
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -33,12 +33,9 @@ workflows:
           npm install --ignore-scripts
           npx cap sync ios
 
-      - name: Fetch Signing & Surgical Patch
+      - name: Fetch Signing & Brute Force Patch
         script: |
           keychain initialize
-          # Clean old certs that might cause "Unknown Distribution Error"
-          keychain list-certificates
-          
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
@@ -53,38 +50,53 @@ workflows:
               sys.exit(1)
           
           target_profile = profile_path[0]
-          # Extract UUID and Name from the binary plist profile
           with open(target_profile, 'rb') as f:
               content = f.read().decode('latin-1')
               uuid = re.search(r'<key>UUID</key>\s*<string>([^<]+)</string>', content).group(1)
               name = re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', content).group(1)
           
+          print(f'Using Profile: {name} ({uuid})')
+          
           with open(os.getenv('CM_ENV'), 'a') as env_file:
               env_file.write(f'\nPROVISIONING_UUID={uuid}')
               env_file.write(f'\nPROVISIONING_NAME={name}')
 
-          def patch_project(file_path):
+          def brute_force_patch(file_path):
               with open(file_path, 'r') as f:
-                  content = f.read()
-              # Force EVERY target to use the Distribution identity and Team ID
-              content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
-              content = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = {dev_team};', content)
-              content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
-              content = re.sub(r'PROVISIONING_PROFILE = [^;]+;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
-              content = re.sub(r'CODE_SIGN_IDENTITY = [^;]+;', 'CODE_SIGN_IDENTITY = \"iPhone Distribution\";', content)
-              content = re.sub(r'CODE_SIGN_IDENTITY\[sdk=iphoneos\*\] = [^;]+;', 'CODE_SIGN_IDENTITY = \"iPhone Distribution\";', content)
+                  lines = f.readlines()
+              
+              new_lines = []
+              for line in lines:
+                  # Force Manual Signing Style
+                  line = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', line)
+                  # Force Team ID
+                  line = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = {dev_team};', line)
+                  # Force Profile UUID
+                  line = re.sub(r'PROVISIONING_PROFILE = [^;]+;', f'PROVISIONING_PROFILE = \"{uuid}\";', line)
+                  # Force Profile Name
+                  line = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', line)
+                  # Force Distribution Identity
+                  line = re.sub(r'CODE_SIGN_IDENTITY = \"[^\"]+\";', 'CODE_SIGN_IDENTITY = \"iPhone Distribution\";', line)
+                  line = re.sub(r'\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = \"[^\"]+\";', '\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"iPhone Distribution\";', line)
+                  new_lines.append(line)
+                  
               with open(file_path, 'w') as f:
-                  f.write(content)
+                  f.writelines(new_lines)
 
+          # Apply to ALL project files including Pods and Capacitor plugins
           for root, dirs, files in os.walk('ios'):
               for file in files:
                   if file == 'project.pbxproj':
-                      patch_project(os.path.join(root, file))
+                      print(f'Patching: {os.path.join(root, file)}')
+                      brute_force_patch(os.path.join(root, file))
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
+          # Clean build folder to ensure no old signatures remain
+          rm -rf ~/Library/Developer/Xcode/DerivedData
+          
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -92,18 +104,17 @@ workflows:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/ios/xcarchive/App.xcarchive \
+            CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE="$PROVISIONING_UUID" \
             PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_NAME" \
-            CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
-            SKIP_INSTALL=NO \
-            clean archive
+            archive
 
       - name: Export IPA
         script: |
-          # V22: Explicitly mapping the Provisioning Profile in the Plist
           mkdir -p build/ios/ipa
+          # V23: Using destination: upload and stripping unnecessary keys
           cat > export_options.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -111,17 +122,21 @@ workflows:
           <dict>
               <key>method</key>
               <string>app-store</string>
+              <key>destination</key>
+              <string>export</string>
               <key>teamID</key>
               <string>$DEVELOPMENT_TEAM</string>
-              <key>uploadSymbols</key>
-              <true/>
-              <key>signingStyle</key>
-              <string>manual</string>
               <key>provisioningProfiles</key>
               <dict>
                   <key>$BUNDLE_ID</key>
                   <string>$PROVISIONING_NAME</string>
               </dict>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>stripSwiftSymbols</key>
+              <true/>
+              <key>uploadSymbols</key>
+              <true/>
           </dict>
           </plist>
           EOF
@@ -129,8 +144,7 @@ workflows:
           xcodebuild -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -exportPath build/ios/ipa \
-            -exportOptionsPlist export_options.plist \
-            -allowProvisioningUpdates
+            -exportOptionsPlist export_options.plist
             
     artifacts:
       - build/ios/ipa/*.ipa
