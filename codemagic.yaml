@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Export Fix V28
+    name: Nur-Mecca iOS Final Fix V29
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -23,7 +23,8 @@ workflows:
     scripts:
       - name: Increment Build Number
         script: |
-          OFFSET=100
+          # Robust version incrementing for project files
+          OFFSET=200
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
@@ -33,7 +34,7 @@ workflows:
           npm install --ignore-scripts
           npx cap sync ios
 
-      - name: Fetch Signing & Brute Force Patch
+      - name: Fetch Signing & Hard-Patch Project
         script: |
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
@@ -42,106 +43,71 @@ workflows:
           python3 -c "
           import os, sys, re, glob
           
-          dev_team = os.getenv('DEVELOPMENT_TEAM', 'JBMD9M6ZPC')
           profile_path = glob.glob(os.path.expanduser('~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision'))
-          
           if not profile_path:
-              print('CRITICAL: No provisioning profile found!')
               sys.exit(1)
           
-          target_profile = profile_path[0]
-          with open(target_profile, 'rb') as f:
+          with open(profile_path[0], 'rb') as f:
               content = f.read().decode('latin-1')
               uuid = re.search(r'<key>UUID</key>\s*<string>([^<]+)</string>', content).group(1)
               name = re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', content).group(1)
-          
-          print(f'Using Profile: {name} ({uuid})')
           
           with open(os.getenv('CM_ENV'), 'a') as env_file:
               env_file.write(f'\nPROVISIONING_UUID={uuid}')
               env_file.write(f'\nPROVISIONING_NAME={name}')
 
-          def brute_force_patch(file_path):
+          def patch(file_path):
               with open(file_path, 'r') as f:
-                  lines = f.readlines()
-              
-              new_lines = []
-              for line in lines:
-                  line = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', line)
-                  line = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = {dev_team};', line)
-                  line = re.sub(r'PROVISIONING_PROFILE = [^;]+;', f'PROVISIONING_PROFILE = \"{uuid}\";', line)
-                  line = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', line)
-                  line = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = [^;]+;', f'PRODUCT_BUNDLE_IDENTIFIER = \"{os.getenv(\"BUNDLE_ID\")}\";', line)
-                  line = re.sub(r'CODE_SIGN_IDENTITY = \"[^\"]+\";', 'CODE_SIGN_IDENTITY = \"iPhone Distribution\";', line)
-                  line = re.sub(r'\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = \"[^\"]+\";', '\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"iPhone Distribution\";', line)
-                  new_lines.append(line)
-                  
+                  text = f.read()
+              text = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', text)
+              text = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = \"JBMD9M6ZPC\";', text)
+              text = re.sub(r'PROVISIONING_PROFILE = [^;]+;', f'PROVISIONING_PROFILE = \"{uuid}\";', text)
               with open(file_path, 'w') as f:
-                  f.writelines(new_lines)
+                  f.write(text)
 
           for root, dirs, files in os.walk('ios'):
               for file in files:
                   if file == 'project.pbxproj':
-                      brute_force_patch(os.path.join(root, file))
+                      patch(os.path.join(root, file))
           "
 
-      - name: Build and Archive iOS App
+      - name: Build and Archive
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
-          rm -rf ~/Library/Developer/Xcode/DerivedData
-          
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
-            -sdk iphoneos \
             -configuration Release \
-            -destination 'generic/platform=iOS' \
             -archivePath build/ios/xcarchive/App.xcarchive \
-            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE="$PROVISIONING_UUID" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_NAME" \
-            CODE_SIGN_IDENTITY="iPhone Distribution" \
-            SKIP_INSTALL=NO \
             archive
 
       - name: Export IPA
         script: |
           mkdir -p build/ios/ipa
           
-          # V28: Force Clear Metadata & Strict XML Plist
-          # We revert to XML but ensure it is stripped of any hidden encoding/BOM
+          # V29: Minimalist Plist (Bypasses the 'expected one' validation error)
+          # We remove signingStyle and let Xcode infer it from the Archive.
           python3 -c "
           import plistlib
           import os
-
           data = {
               'method': 'app-store',
-              'teamID': os.environ['DEVELOPMENT_TEAM'],
-              'provisioningProfiles': {
-                  os.environ['BUNDLE_ID']: os.environ['PROVISIONING_NAME']
-              },
-              'signingStyle': 'manual',
-              'stripSwiftSymbols': True,
+              'teamID': 'JBMD9M6ZPC',
               'uploadSymbols': True,
-              'manageAppVersionAndBuildNumber': False,
-              'generateAppStoreInformation': False
+              'uploadBitcode': False,
+              'manageAppVersionAndBuildNumber': False
           }
-
-          # Use FMT_XML for broader compatibility but write as bytes to avoid encoding errors
           with open('export_options.plist', 'wb') as f:
-              plistlib.dump(data, f, fmt=plistlib.FMT_XML)
+              plistlib.dump(data, f)
           "
-
-          # Debug: Print the plist content to logs to verify no corruption
-          cat export_options.plist
 
           xcodebuild -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -exportPath build/ios/ipa \
-            -exportOptionsPlist export_options.plist \
-            -allowProvisioningUpdates
+            -exportOptionsPlist export_options.plist
             
     artifacts:
       - build/ios/ipa/*.ipa
