@@ -46,7 +46,7 @@ workflows:
           echo "Hard-patching project with Profile UUID: $PROV_PROFILE_UUID"
           echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           
-          # NUCLEAR SCRIPT: Forces every target in every project to Manual signing with the specific UUID
+          # NUCLEAR SCRIPT V2: Targets the TargetAttributes and Build Settings specifically
           python3 -c "
           import os, re
           uuid = '$PROV_PROFILE_UUID'
@@ -58,27 +58,29 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # 1. Force Manual Style
-                      content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
-                      content = re.sub(r'CODE_SIGN_STYLE = .*?;', 'CODE_SIGN_STYLE = Manual;', content)
+                      # 1. Force Manual Style globally in attributes
+                      content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
                       
-                      # 2. Inject Team and Profile info into Build Settings
+                      # 2. Inject/Overwrite Build Settings
+                      content = re.sub(r'CODE_SIGN_STYLE = .*?;', 'CODE_SIGN_STYLE = Manual;', content)
                       content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team};', content)
                       content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{uuid}\";', content)
                       
-                      # 3. Handle TargetAttributes (Clearing out the Cloud-based profile mapping)
-                      content = re.sub(r'ProvisioningStyle = Manual;', 'ProvisioningStyle = Manual;', content)
-                      
+                      # 3. Handle cases where the keys don't exist yet (Injection)
+                      if 'PROVISIONING_PROFILE_SPECIFIER' not in content:
+                          content = content.replace('CODE_SIGN_IDENTITY = \"iPhone Distribution\";', 
+                                                 f'CODE_SIGN_IDENTITY = \"iPhone Distribution\";\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{uuid}\";\n\t\t\t\tDEVELOPMENT_TEAM = {team};')
+
                       with open(path, 'w') as f: f.write(content)
-                      print(f'Patched: {path}')
+                      print(f'Nuclear Patch Applied to: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # Using CODE_SIGN_ALLOW_CONSTANT_SIGNING_EXAMINATION to force Xcode to use our CLI-provided profile
+          # Added COMPILER_INDEX_STORE_ENABLE=NO to prevent background indexer interference
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -92,6 +94,7 @@ workflows:
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
             CODE_SIGN_ALLOW_CONSTANT_SIGNING_EXAMINATION=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             archive
 
       - name: Export and Post-Processing
