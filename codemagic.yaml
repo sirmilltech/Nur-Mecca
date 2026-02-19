@@ -25,7 +25,7 @@ workflows:
     scripts:
       - name: Increment Build Number
         script: |
-          OFFSET=70
+          OFFSET=75
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
@@ -35,21 +35,18 @@ workflows:
           npm install --ignore-scripts
           npx cap sync ios
 
-      - name: Fetch Signing & Hard-Patch Project
+      - name: Fetch Signing & Force Manual Configuration
         script: |
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # Extract the UUID of the downloaded profile
+          # Extract the UUID and Name of the profile
           PROV_PROFILE_UUID=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "UUID" | head -n 1 | awk '{print $2}')
           echo "Hard-patching project with Profile UUID: $PROV_PROFILE_UUID"
+          echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           
-          # Set global environment variables that xcodebuild respects
-          echo "PROVISIONING_PROFILE_SPECIFIER=$PROV_PROFILE_UUID" >> $CM_ENV
-          echo "PROVISIONING_PROFILE=$PROV_PROFILE_UUID" >> $CM_ENV
-          
-          # THE FINAL OVERRIDE SCRIPT
+          # NUCLEAR SCRIPT: Forces every target in every project to Manual signing with the specific UUID
           python3 -c "
           import os, re
           uuid = '$PROV_PROFILE_UUID'
@@ -61,32 +58,35 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # 1. REMOVE Automatic signing entirely
+                      # 1. Force Manual Style
                       content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
-                      
-                      # 2. FORCE Manual style on every configuration
                       content = re.sub(r'CODE_SIGN_STYLE = .*?;', 'CODE_SIGN_STYLE = Manual;', content)
                       
-                      # 3. INJECT the specific profile UUID everywhere
+                      # 2. Inject Team and Profile info into Build Settings
                       content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team};', content)
                       content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{uuid}\";', content)
                       
+                      # 3. Clean up TargetAttributes (The place where Xcode hides the 'Automatic' checkbox)
+                      content = re.sub(r'ProvisioningStyle = Manual;', 'ProvisioningStyle = Manual;', content)
+                      
                       with open(path, 'w') as f: f.write(content)
-                      print(f'Successfully forced manual signing in: {path}')
+                      print(f'Patched: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # We pass the profile UUIDs as top-level arguments to override any target-level logic
+          # We pass variables as CLI arguments AND use the -allowProvisioningUpdates flag 
+          # just in case Xcode 16 needs to reach out for a refresh
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
             -sdk iphoneos \
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
+            -allowProvisioningUpdates \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
