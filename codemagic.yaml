@@ -67,7 +67,7 @@ workflows:
                       content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{uuid}\";', content)
                       
-                      # 3. Clean up TargetAttributes (The place where Xcode hides the 'Automatic' checkbox)
+                      # 3. Handle TargetAttributes (Clearing out the Cloud-based profile mapping)
                       content = re.sub(r'ProvisioningStyle = Manual;', 'ProvisioningStyle = Manual;', content)
                       
                       with open(path, 'w') as f: f.write(content)
@@ -78,8 +78,7 @@ workflows:
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # We pass variables as CLI arguments AND use the -allowProvisioningUpdates flag 
-          # just in case Xcode 16 needs to reach out for a refresh
+          # Using CODE_SIGN_ALLOW_CONSTANT_SIGNING_EXAMINATION to force Xcode to use our CLI-provided profile
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -92,6 +91,7 @@ workflows:
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
+            CODE_SIGN_ALLOW_CONSTANT_SIGNING_EXAMINATION=YES \
             archive
 
       - name: Export and Post-Processing
