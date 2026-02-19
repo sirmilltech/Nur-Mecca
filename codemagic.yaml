@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Universal Signing Fix
+    name: Nur-Mecca iOS Surgical Signing Fix
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -25,7 +25,7 @@ workflows:
     scripts:
       - name: Increment Build Number
         script: |
-          OFFSET=80
+          OFFSET=82
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
@@ -35,60 +35,65 @@ workflows:
           npm install --ignore-scripts
           npx cap sync ios
 
-      - name: Fetch Signing & Force Manual Configuration
+      - name: Fetch Signing & Surgical Patch
         script: |
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # Extract Profile UUID and Name
+          # Fetch Profile Details
           PROV_PROFILE_UUID=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "UUID" | head -n 1 | awk '{print $2}')
           PROV_PROFILE_NAME=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "Name" | head -n 1 | cut -d':' -f2 | xargs)
           
           echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           echo "PROV_PROFILE_NAME=$PROV_PROFILE_NAME" >> $CM_ENV
           
-          # V12: ABSOLUTE BYPASS - Targeting TargetAttributes specifically
+          # V13: SURGICAL PATCH - Safer line-by-line editing
           python3 -c "
-          import os, re
+          import os, sys
           uuid = '$PROV_PROFILE_UUID'
           name = '$PROV_PROFILE_NAME'
           team = '$DEVELOPMENT_TEAM'
           
+          if not uuid or not name:
+              print('CRITICAL: Profile variables are empty!')
+              sys.exit(0)
+
           for root, dirs, files in os.walk('.'):
               for file in files:
                   if file == 'project.pbxproj':
                       path = os.path.join(root, file)
-                      with open(path, 'r') as f: content = f.read()
+                      with open(path, 'r') as f: lines = f.readlines()
                       
-                      # 1. Force Manual Style for ALL targets in TargetAttributes
-                      content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
+                      new_lines = []
+                      for line in lines:
+                          # Force Manual Style
+                          if 'ProvisioningStyle =' in line:
+                              new_lines.append(line.replace('Automatic', 'Manual'))
+                          # Force Team
+                          elif 'DEVELOPMENT_TEAM =' in line:
+                              new_lines.append(f'\t\t\t\tDEVELOPMENT_TEAM = {team};\n')
+                          # Force Profile Name
+                          elif 'PROVISIONING_PROFILE_SPECIFIER =' in line:
+                              new_lines.append(f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n')
+                          # Force Profile UUID
+                          elif 'PROVISIONING_PROFILE =' in line:
+                              new_lines.append(f'\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";\n')
+                          # Force Manual Code Sign Style
+                          elif 'CODE_SIGN_STYLE =' in line:
+                              new_lines.append(f'\t\t\t\tCODE_SIGN_STYLE = Manual;\n')
+                          else:
+                              new_lines.append(line)
                       
-                      # 2. Inject specific profile mapping into TargetAttributes if they exist
-                      # This ensures the 'App' target is linked to the profile name at the root level
-                      attr_pattern = r'(TargetAttributes = \{.*?\n)'
-                      attr_injection = f'\\1\t\t\t\t\tProvisioningStyle = Manual;\n\t\t\t\t\tDevelopmentTeam = {team};\n'
-                      content = re.sub(attr_pattern, attr_injection, content, flags=re.DOTALL)
-
-                      # 3. Strip all old specifiers and re-inject fresh into BuildSettings
-                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', '', content)
-                      content = re.sub(r'PROVISIONING_PROFILE = .*?;', '', content)
-                      
-                      content = content.replace('buildSettings = {', 
-                        f'buildSettings = {{\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";\n\t\t\t\tDEVELOPMENT_TEAM = {team};\n\t\t\t\tCODE_SIGN_STYLE = Manual;')
-
-                      # 4. Force Bundle ID
-                      content = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = .*?;', f'PRODUCT_BUNDLE_IDENTIFIER = \"com.milltech.nurmecca.app\";', content)
-
-                      with open(path, 'w') as f: f.write(content)
-                      print(f'V12 Absolute Bypass applied to: {path}')
+                      with open(path, 'w') as f: f.writelines(new_lines)
+                      print(f'Surgical fix applied to: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # Use -allowProvisioningUpdates but pass the manual overrides as final word
+          # Use variables from environment to ensure they aren't empty in command line
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -96,7 +101,6 @@ workflows:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/ios/xcarchive/App.xcarchive \
-            -allowProvisioningUpdates \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
@@ -104,7 +108,7 @@ workflows:
             CODE_SIGN_IDENTITY="iPhone Distribution" \
             clean archive
 
-      - name: Export and Post-Processing
+      - name: Export IPA
         script: |
           cat > export_options.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
