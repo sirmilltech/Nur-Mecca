@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Final Fix V31
+    name: Nur-Mecca iOS Final Fix V32
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -75,6 +75,12 @@ workflows:
                       deep_patch(os.path.join(root, file))
           "
 
+      - name: Hard-Stamp Bundle ID to Info.plist
+        script: |
+          # Find all Info.plist files and force the CFBundleIdentifier to match our ID
+          # This prevents the "Archive Missing Bundle Identifier" error
+          find ios -name "Info.plist" -exec plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" {} +
+
       - name: Build and Archive
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
@@ -95,7 +101,7 @@ workflows:
         script: |
           mkdir -p build/ios/ipa
           python3 -c "
-          import plistlib
+          import os, plistlib
           data = {
               'method': 'app-store',
               'teamID': 'JBMD9M6ZPC',
