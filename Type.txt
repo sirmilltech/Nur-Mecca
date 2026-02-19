@@ -1,0 +1,123 @@
+Type
+App Store
+App ID
+Nur-Mecca(JBMD9M6ZPC.com.milltech.nurmecca.app)
+
+Generate a Provisioning Profile
+Download and Install
+Download and double click the following file to install your Provisioning Profile.
+
+Name:Nur-Mecca
+Type:App StoreApp ID:JBMD9M6ZPC.com.milltech.nurmecca.app
+
+Expires:2027/01/11
+
+Download certificate
+Codemagic has successfully generated a new password-protected code signing certificate. For security purposes, you can only download it once.
+Please take note of the password for certificate.
+
+Password for certificate:
+FGsr4HO8
+
+# Replace the path below with the one you copied
+
+$filePath = "C:\dev\Nur-Mecca\AuthKey_U2SA5VYGH7.p8" [Convert]::ToBase64String([IO.File]::ReadAllBytes($filePath))
+
+"Enter unique reference name to be used in codemagic.yaml":
+
+Type: NurMecca_Provisioning_Profile
+
+
+
+App Store Connect API
+
+Created By
+API Key: 23c68740-0952-48ad-ad59-f0467943bbb072c884d2-2e79-4ec8-8a9b-5793ab0aeb75 
+
+Review Provisioning Profile
+App ID
+Nur-Mecca (com.milltech.nurmecca.app)
+
+
+BUNDLE ID
+Nur-Mecca - com.milltech.nurmecca.app
+
+Generate a Provisioning Profile
+Name
+NurMecca_Distribution
+
+
+SKU
+MILLTECH-MT
+
+Apple ID
+6759008303
+
+
+App Store Connect API
+
+NAME
+Codemagic_Key
+
+KEY ID
+CXWZPBJPRH
+
+
+Issuer ID
+eba2ce03-c54a-447a-b1a5-d97006c92fe0
+
+
+PRIVATE KEY
+
+-----BEGIN PRIVATE KEY-----
+MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQg7ZakvXCTIfW+CcNO
+nOyqFX0awPwBCsuLh9ptsoFSfxKgCgYIKoZIzj0DAQehRANCAARAD/Hw+rF6YqXw
+j6rwJEHnxCBETImWjAW65DIpMLfYfinBvzmxoN9P+uzTQ+UKnxzG/kAxtipvm/1U
+7bsLn1a7
+-----END PRIVATE KEY-----
+
+
+Prod_Distribution_Certificate
+Codemagic has successfully generated a new password-protected code signing certificate. For security purposes, you can only download it once.
+Please take note of the password for certificate.
+Password for certificate:
+ufqWKAOJ
+
+
+
+
+
+NurMecca_Distribution
+
+
+
+Generate a Provisioning Profile
+Download
+Download and Install
+Download and double click the following file to install your Provisioning Profile.
+
+Name:
+NurMecca_Distribution_Provisioning_Profile
+
+Type:
+App Store
+
+App ID:
+JBMD9M6ZPC.com.milltech.nurmecca.app
+
+Expires:2027/02/15
+
+
+
+
+# Replace PATH_TO_PROFILE with your .mobileprovision path
+[Convert]::ToBase64String([System.IO.File]::ReadAllBytes("C:\path\to\your_profile.mobileprovision")) > C:\path\to\profile_base64.txt
+
+
+
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("NurMecca_Distribution_Provisioning_Profile.mobileprovision")) | Out-File profile_base64.txt
+
+
+
+
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("prod_distribution_certificate.p12")) | Out-File p12_base64.txt
