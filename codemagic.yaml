@@ -48,7 +48,7 @@ workflows:
           echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           echo "PROV_PROFILE_NAME=$PROV_PROFILE_NAME" >> $CM_ENV
           
-          # V9 SUPER-NUCLEAR: Global attribute injection
+          # V10 OMEGA: Global attribute injection with clean-slate logic
           python3 -c "
           import os, re
           uuid = '$PROV_PROFILE_UUID'
@@ -65,8 +65,12 @@ workflows:
                       content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
                       content = re.sub(r'CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;', content)
                       
-                      # 2. Hard-inject signing into every buildSettings block
-                      # We target both Debug and Release to be safe
+                      # 2. Omega Wipe: Remove any existing conflicting keys
+                      keys_to_wipe = ['DEVELOPMENT_TEAM', 'PROVISIONING_PROFILE_SPECIFIER', 'PROVISIONING_PROFILE', 'CODE_SIGN_IDENTITY']
+                      for key in keys_to_wipe:
+                          content = re.sub(f'{key} = .*?;', '', content)
+                      
+                      # 3. Hard-inject signing into buildSettings
                       settings_to_inject = [
                           f'DEVELOPMENT_TEAM = {team};',
                           f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";',
@@ -75,26 +79,20 @@ workflows:
                           'CODE_SIGN_IDENTITY = \"iPhone Distribution\";'
                       ]
                       
-                      for setting in settings_to_inject:
-                          key = setting.split('=')[0].strip()
-                          # If key exists, replace it. If not, inject it.
-                          if key in content:
-                              content = re.sub(f'{key} = .*?;', setting, content)
-                          else:
-                              content = content.replace('buildSettings = {', f'buildSettings = {{\n\t\t\t\t{setting}')
+                      content = content.replace('buildSettings = {', 'buildSettings = {\n' + '\n'.join([f'\t\t\t\t{s}' for s in settings_to_inject]))
 
-                      # 3. Force main bundle ID
+                      # 4. Force main bundle ID
                       content = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = .*?;', f'PRODUCT_BUNDLE_IDENTIFIER = \"com.milltech.nurmecca.app\";', content)
 
                       with open(path, 'w') as f: f.write(content)
-                      print(f'V9 Super-Nuclear applied to: {path}')
+                      print(f'V10 Omega applied to: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # V9 ARCHIVE: Force cleaning derived data and overriding profile globally
+          # V10 OMEGA: Using explicit PROVISIONING_PROFILE override at the command line level
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -103,7 +101,6 @@ workflows:
             -destination 'generic/platform=iOS' \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -allowProvisioningUpdates \
-            -clonedSourcePackagesDirPath "$(pwd)/.spm_cache" \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
