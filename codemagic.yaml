@@ -25,8 +25,7 @@ workflows:
     scripts:
       - name: Increment Build Number
         script: |
-          # Use a higher offset to avoid "Redundant Binary" errors
-          OFFSET=60
+          OFFSET=70
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
@@ -45,13 +44,16 @@ workflows:
           # Extract the UUID of the downloaded profile
           PROV_PROFILE_UUID=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "UUID" | head -n 1 | awk '{print $2}')
           echo "Hard-patching project with Profile UUID: $PROV_PROFILE_UUID"
-          echo "PROVISIONING_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           
-          # NUCLEAR PATCH: This script forces every configuration to Manual and injects the profile
+          # Set global environment variables that xcodebuild respects
+          echo "PROVISIONING_PROFILE_SPECIFIER=$PROV_PROFILE_UUID" >> $CM_ENV
+          echo "PROVISIONING_PROFILE=$PROV_PROFILE_UUID" >> $CM_ENV
+          
+          # THE FINAL OVERRIDE SCRIPT
           python3 -c "
           import os, re
-          uuid = os.getenv('PROV_PROFILE_UUID') or '$PROV_PROFILE_UUID'
-          team = os.getenv('DEVELOPMENT_TEAM')
+          uuid = '$PROV_PROFILE_UUID'
+          team = '$DEVELOPMENT_TEAM'
           
           for root, dirs, files in os.walk('.'):
               for file in files:
@@ -59,27 +61,26 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # Force Manual Signing Style
-                      content = re.sub(r'ProvisioningStyle = \w+;', 'ProvisioningStyle = Manual;', content)
-                      content = re.sub(r'CODE_SIGN_STYLE = \w+;', 'CODE_SIGN_STYLE = Manual;', content)
+                      # 1. REMOVE Automatic signing entirely
+                      content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
                       
-                      # Inject Team and Profile UUID into ALL build settings blocks
+                      # 2. FORCE Manual style on every configuration
+                      content = re.sub(r'CODE_SIGN_STYLE = .*?;', 'CODE_SIGN_STYLE = Manual;', content)
+                      
+                      # 3. INJECT the specific profile UUID everywhere
                       content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team};', content)
                       content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
                       content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{uuid}\";', content)
                       
-                      # Special fix for Capacitor/SPM targets that often default to Automatic
-                      content = content.replace('SystemCapabilities = {', 'SystemCapabilities = { com.apple.Push = { enabled = 0; }; ')
-                      
                       with open(path, 'w') as f: f.write(content)
-                      print(f'Nuked Automatic Signing in: {path}')
+                      print(f'Successfully forced manual signing in: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # Building with explicit profile overrides at the command line
+          # We pass the profile UUIDs as top-level arguments to override any target-level logic
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -88,8 +89,8 @@ workflows:
             -archivePath build/ios/xcarchive/App.xcarchive \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_UUID" \
-            PROVISIONING_PROFILE="$PROVISIONING_PROFILE_UUID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_UUID" \
+            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
             archive
 
