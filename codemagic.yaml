@@ -25,7 +25,7 @@ workflows:
     scripts:
       - name: Increment Build Number
         script: |
-          OFFSET=82
+          OFFSET=90
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
@@ -48,7 +48,7 @@ workflows:
           echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           echo "PROV_PROFILE_NAME=$PROV_PROFILE_NAME" >> $CM_ENV
           
-          # V13: SURGICAL PATCH - Safer line-by-line editing
+          # V14: DEEP SURGICAL PATCH - Forces settings into every configuration block
           python3 -c "
           import os, sys
           uuid = '$PROV_PROFILE_UUID'
@@ -57,7 +57,7 @@ workflows:
           
           if not uuid or not name:
               print('CRITICAL: Profile variables are empty!')
-              sys.exit(0)
+              sys.exit(1)
 
           for root, dirs, files in os.walk('.'):
               for file in files:
@@ -67,33 +67,39 @@ workflows:
                       
                       new_lines = []
                       for line in lines:
-                          # Force Manual Style
+                          # 1. Force Style to Manual
                           if 'ProvisioningStyle =' in line:
                               new_lines.append(line.replace('Automatic', 'Manual'))
-                          # Force Team
+                          # 2. Inject Team ID
                           elif 'DEVELOPMENT_TEAM =' in line:
                               new_lines.append(f'\t\t\t\tDEVELOPMENT_TEAM = {team};\n')
-                          # Force Profile Name
+                          # 3. Inject Profile Specifier (Name)
                           elif 'PROVISIONING_PROFILE_SPECIFIER =' in line:
                               new_lines.append(f'\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n')
-                          # Force Profile UUID
+                          # 4. Inject Profile UUID
                           elif 'PROVISIONING_PROFILE =' in line:
                               new_lines.append(f'\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";\n')
-                          # Force Manual Code Sign Style
+                          # 5. Inject Code Sign Identity
+                          elif 'CODE_SIGN_IDENTITY =' in line and '\"iPhone Distribution\"' not in line:
+                              new_lines.append(f'\t\t\t\tCODE_SIGN_IDENTITY = \"iPhone Distribution\";\n')
+                          # 6. Ensure Manual Signing Style
                           elif 'CODE_SIGN_STYLE =' in line:
                               new_lines.append(f'\t\t\t\tCODE_SIGN_STYLE = Manual;\n')
                           else:
                               new_lines.append(line)
                       
                       with open(path, 'w') as f: f.writelines(new_lines)
-                      print(f'Surgical fix applied to: {path}')
+                      print(f'V14 deep patch applied to: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # Use variables from environment to ensure they aren't empty in command line
+          # Force export to environment just in case
+          export PROV_PROFILE_NAME="$PROV_PROFILE_NAME"
+          export PROV_PROFILE_UUID="$PROV_PROFILE_UUID"
+
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -106,6 +112,7 @@ workflows:
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
+            -allowProvisioningUpdates \
             clean archive
 
       - name: Export IPA
