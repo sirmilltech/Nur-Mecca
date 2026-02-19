@@ -26,7 +26,7 @@ workflows:
       - name: Increment Build Number
         script: |
           # Use a higher offset to avoid "Redundant Binary" errors
-          OFFSET=50
+          OFFSET=60
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
@@ -36,7 +36,7 @@ workflows:
           npm install --ignore-scripts
           npx cap sync ios
 
-      - name: Fetch Signing & Force Patch Project
+      - name: Fetch Signing & Hard-Patch Project
         script: |
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
@@ -44,16 +44,14 @@ workflows:
           
           # Extract the UUID of the downloaded profile
           PROV_PROFILE_UUID=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "UUID" | head -n 1 | awk '{print $2}')
-          echo "Infecting project with Profile UUID: $PROV_PROFILE_UUID"
-          
-          # Export to environment for the build script to see
+          echo "Hard-patching project with Profile UUID: $PROV_PROFILE_UUID"
           echo "PROVISIONING_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           
-          # Advanced Python Patcher: Forces manual signing and UUID injection on every single build configuration
+          # NUCLEAR PATCH: This script forces every configuration to Manual and injects the profile
           python3 -c "
           import os, re
-          target_uuid = os.getenv('PROV_PROFILE_UUID') or '$PROV_PROFILE_UUID'
-          team_id = os.getenv('DEVELOPMENT_TEAM')
+          uuid = os.getenv('PROV_PROFILE_UUID') or '$PROV_PROFILE_UUID'
+          team = os.getenv('DEVELOPMENT_TEAM')
           
           for root, dirs, files in os.walk('.'):
               for file in files:
@@ -61,29 +59,27 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # Force ProvisioningStyle to Manual for all targets
+                      # Force Manual Signing Style
                       content = re.sub(r'ProvisioningStyle = \w+;', 'ProvisioningStyle = Manual;', content)
+                      content = re.sub(r'CODE_SIGN_STYLE = \w+;', 'CODE_SIGN_STYLE = Manual;', content)
                       
-                      # Inject Team ID
-                      content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team_id};', content)
+                      # Inject Team and Profile UUID into ALL build settings blocks
+                      content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team};', content)
+                      content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
+                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{uuid}\";', content)
                       
-                      # Force the specific Profile UUID and disable automatic enrollment
-                      content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{target_uuid}\";', content)
-                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{target_uuid}\";', content)
-                      content = re.sub(r'CODE_SIGN_STYLE = .*?;', 'CODE_SIGN_STYLE = Manual;', content)
-                      
-                      # Turn off Automatic Signing in the System Capabilities section
-                      content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
+                      # Special fix for Capacitor/SPM targets that often default to Automatic
+                      content = content.replace('SystemCapabilities = {', 'SystemCapabilities = { com.apple.Push = { enabled = 0; }; ')
                       
                       with open(path, 'w') as f: f.write(content)
-                      print(f'Successfully patched all targets in: {path}')
+                      print(f'Nuked Automatic Signing in: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # We pass the UUID explicitly to xcodebuild to override any leftover cached settings
+          # Building with explicit profile overrides at the command line
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
