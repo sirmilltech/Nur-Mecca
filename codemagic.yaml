@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Final Signing Fix V20
+    name: Nur-Mecca iOS Final Signing Fix V21
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -62,11 +62,13 @@ workflows:
           def patch_project(file_path):
               with open(file_path, 'r') as f:
                   content = f.read()
+              # Force Manual and exact IDs into the project file
               content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
               content = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = {dev_team};', content)
               content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
               content = re.sub(r'PROVISIONING_PROFILE = [^;]+;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
               content = re.sub(r'CODE_SIGN_IDENTITY = [^;]+;', 'CODE_SIGN_IDENTITY = \"iPhone Distribution\";', content)
+              content = re.sub(r'CODE_SIGN_IDENTITY\[sdk=iphoneos\*\] = [^;]+;', 'CODE_SIGN_IDENTITY = \"iPhone Distribution\";', content)
               with open(file_path, 'w') as f:
                   f.write(content)
 
@@ -96,10 +98,8 @@ workflows:
 
       - name: Export IPA
         script: |
-          # V20 Fix: Using allowProvisioningUpdates to let Xcode handle the Plist logic automatically
+          # V21: The "Minimalist" Plist to bypass DistributionMethodManager errors
           mkdir -p build/ios/ipa
-          
-          # Simplified Plist that forces Xcode to resolve the signing itself
           cat > export_options.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -109,12 +109,15 @@ workflows:
               <string>app-store</string>
               <key>teamID</key>
               <string>$DEVELOPMENT_TEAM</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>$BUNDLE_ID</key>
+                  <string>$PROVISIONING_NAME</string>
+              </dict>
               <key>uploadSymbols</key>
               <true/>
-              <key>manageAppVersionAndBuildNumber</key>
-              <true/>
-              <key>signingStyle</key>
-              <string>automatic</string>
+              <key>thinning</key>
+              <string>&lt;none&gt;</string>
           </dict>
           </plist>
           EOF
