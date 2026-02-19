@@ -34,7 +34,7 @@ workflows:
     scripts:
       - name: Set automatic iOS build number
         script: |
-          OFFSET=10 
+          OFFSET=15 
           BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
           echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
           find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
@@ -49,18 +49,24 @@ workflows:
           EOF
           npx cap sync ios
 
-      - name: Set up Code Signing (Automatic)
+      - name: Set up Code Signing
         script: |
           keychain initialize
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          # This command fetches the profile and gives us the UUID
+          PROFILES_DATA=$(app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create)
           keychain add-certificates
+          
+          # Export the Profile UUID so we can force xcodebuild to use it
+          PROV_PROFILE=$(apple-provisioning-profiles list --bundle-id "$BUNDLE_ID" --type IOS_APP_STORE | grep "UUID" | head -n 1 | awk '{print $2}')
+          echo "PROVISIONING_PROFILE_UUID=$PROV_PROFILE" >> $CM_ENV
 
-      - name: Force App Configuration
+      - name: Force Project Signing Config
         script: |
           XCODE_PROJECT=$(find ios -name "*.xcodeproj" | head -n 1)
           PBXPROJ="$XCODE_PROJECT/project.pbxproj"
-          # Set to Automatic to let xcodebuild handle the profiles fetched by Codemagic
-          sed -i '' "s/ProvisioningStyle = Manual;/ProvisioningStyle = Automatic;/g" "$PBXPROJ"
+          
+          # Force Manual signing so Xcode doesn't look for an 'Account' (Apple ID)
+          sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
           sed -i '' "s/DEVELOPMENT_TEAM = [^;]*;/DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM;/g" "$PBXPROJ"
           
           # Patch Info.plist for the icon requirement
@@ -73,42 +79,35 @@ workflows:
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
+          # We pass the signing details directly into the build command
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
             -sdk iphoneos \
             -configuration Release \
             -archivePath build/ios/xcarchive/App.xcarchive \
-            -allowProvisioningUpdates \
-            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_UUID" \
             archive
 
       - name: Export and Binary Injection Fix
         script: |
-          # The binary injection fix remains to ensure Apple's strict validation passes
           xcodebuild -exportArchive \
             -archivePath build/ios/xcarchive/App.xcarchive \
             -exportPath build/ios/ipa \
             -exportOptionsPlist /Users/builder/export_options.plist
 
-          # --- BRUTE FORCE IPA INJECTION ---
           IPA_PATH=$(find build/ios/ipa -name "*.ipa")
-          echo "Unzipping IPA to inject missing CFBundleIconName..."
           unzip -q "$IPA_PATH" -d temp_ipa
-          
           APP_PATH=$(find temp_ipa/Payload -name "*.app")
           PLIST="$APP_PATH/Info.plist"
           
-          echo "Applying fix to binary Plist at $PLIST"
           /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$PLIST" || true
           /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$PLIST"
           
-          echo "Re-signing the binary..."
-          # Re-sign using the certificate installed by Codemagic
           /usr/bin/codesign --force --sign "Apple Distribution" "$APP_PATH"
           
-          echo "Re-packaging IPA..."
           cd temp_ipa && zip -qr ../App_Fixed.ipa . && cd ..
           mv App_Fixed.ipa "$IPA_PATH"
           rm -rf temp_ipa
