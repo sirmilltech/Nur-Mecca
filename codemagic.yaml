@@ -34,14 +34,21 @@ workflows:
     scripts:
       - name: Set automatic iOS build number
         script: |
-          echo "Using Codemagic Build Number: $CM_BUILD_NUMBER"
-          echo "BUILD_NUMBER=$CM_BUILD_NUMBER" >> $CM_ENV
-
-          find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $CM_BUILD_NUMBER;/g" {} +
+          # Use CM_BUILD_NUMBER and add an offset to avoid "Redundant Binary Upload"
+          # Since your last failed build was 6, setting OFFSET to 6 ensures the next is 7+
+          OFFSET=6 
+          BUILD_NUM=$((${CM_BUILD_NUMBER:-1} + $OFFSET))
+          
+          echo "Setting Build Number to: $BUILD_NUM (Codemagic Build: $CM_BUILD_NUMBER + Offset: $OFFSET)"
+          
+          # Export to environment for subsequent scripts
+          echo "BUILD_NUMBER=$BUILD_NUM" >> $CM_ENV
+          
+          # Patch all project files to ensure consistency
+          find . -name "project.pbxproj" -exec sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILD_NUM;/g" {} +
 
       - name: Initialize Environment & Repair iOS Platform
         script: |
-          echo "Node version: $(node -v)"
           npm install --ignore-scripts
           mkdir -p www
           if [ ! -f "www/index.html" ]; then
@@ -65,15 +72,11 @@ workflows:
           DETECTED_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           DETECTED_PROJECT=$(find ios -name "*.xcodeproj" | head -n 1)
           
-          echo "Found Workspace: $DETECTED_WORKSPACE"
-          echo "Found Project: $DETECTED_PROJECT"
-          
           echo "XCODE_WORKSPACE=$DETECTED_WORKSPACE" >> $CM_ENV
           echo "XCODE_PROJECT=$DETECTED_PROJECT" >> $CM_ENV
 
       - name: Force Manual Signing in Xcode
         script: |
-          echo "Disabling Automatic Signing and Injecting Team ID..."
           if [ -f "$XCODE_PROJECT/project.pbxproj" ]; then
             PBXPROJ="$XCODE_PROJECT/project.pbxproj"
             sed -i '' "s/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/g" "$PBXPROJ"
@@ -83,14 +86,13 @@ workflows:
             sed -i '' "s/PRODUCT_BUNDLE_IDENTIFIER = [^;]*;/PRODUCT_BUNDLE_IDENTIFIER = $BUNDLE_ID;/g" "$PBXPROJ"
           fi
 
-      - name: Patch Info.plist for Missing Bundle ID
+      - name: Patch Info.plist for Versioning
         script: |
-          echo "Patching Info.plist with Build Number: $BUILD_NUMBER"
           PLIST_PATH=$(find ios -name "Info.plist" | grep -v "Pods" | head -n 1)
           if [ -f "$PLIST_PATH" ]; then
             /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$PLIST_PATH"
             /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $BUILD_NUMBER" "$PLIST_PATH"
-            echo "Patched $PLIST_PATH with version $BUILD_NUMBER"
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.0.0" "$PLIST_PATH" || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.0.0" "$PLIST_PATH"
           fi
 
       - name: Resolve Swift Package Dependencies
@@ -99,23 +101,17 @@ workflows:
 
       - name: Build and Sign iOS App
         script: |
-          if [ -n "$PRIVATE_KEY" ]; then
-            mkdir -p ~/.appstoreconnect/private_keys
-            echo "$PRIVATE_KEY" | tr -d '\r' > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8
-          fi
-
           keychain initialize
           keychain add-certificates || true
 
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" 2>/dev/null | head -n 1)
           if [ -z "$PROV_PROFILE_PATH" ]; then
-            echo "ERROR: No profile found."
+            echo "ERROR: No provisioning profile found. Ensure 'ios_signing' is configured correctly."
             exit 1
           fi
 
-          TMP_PLIST=$(mktemp /tmp/provplist.plist)
-          security cms -D -i "$PROV_PROFILE_PATH" > "$TMP_PLIST"
-          PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" "$TMP_PLIST")
+          # Extract Profile Name
+          PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$PROV_PROFILE_PATH"))
 
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
@@ -132,6 +128,7 @@ workflows:
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             clean archive
 
+          # Generate ExportOptions
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
