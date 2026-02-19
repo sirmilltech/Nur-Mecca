@@ -48,7 +48,7 @@ workflows:
           echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           echo "PROV_PROFILE_NAME=$PROV_PROFILE_NAME" >> $CM_ENV
           
-          # NUCLEAR SCRIPT V7: Deep Attribute Deletion & Manual Override
+          # ULTIMATE LOCKDOWN V8: Recursive target alignment for SPM and Sub-projects
           python3 -c "
           import os, re
           uuid = '$PROV_PROFILE_UUID'
@@ -61,30 +61,28 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # 1. Force ProvisioningStyle to Manual
+                      # 1. Kill Automatic Signing everywhere
                       content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
+                      content = re.sub(r'CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;', content)
                       
-                      # 2. Add ProvisioningStyle = Manual if missing
-                      content = re.sub(r'([A-Z0-9]{24} = \{[^\}]*?)(?!\s*ProvisioningStyle)', r'\1\n\t\t\t\t\tProvisioningStyle = Manual;', content)
+                      # 2. Force manual settings into every build configuration block
+                      # This targets the buildSettings {} blocks directly
+                      content = re.sub(r'buildSettings = \{', f'buildSettings = {{\n\t\t\t\tDEVELOPMENT_TEAM = {team};\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";\n\t\t\t\tCODE_SIGN_STYLE = Manual;', content)
 
-                      # 3. Global Build Settings Overwrite
-                      content = re.sub(r'CODE_SIGN_STYLE = .*?;', 'CODE_SIGN_STYLE = Manual;', content)
-                      content = re.sub(r'DEVELOPMENT_TEAM = .*?;', f'DEVELOPMENT_TEAM = {team};', content)
-                      content = re.sub(r'PROVISIONING_PROFILE = .*?;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
-                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
-                      
-                      # 4. Target Specific Injection
-                      content = content.replace('PRODUCT_NAME = App;', f'PRODUCT_NAME = App;\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";\n\t\t\t\tDEVELOPMENT_TEAM = {team};')
+                      # 3. Handle PRODUCT_BUNDLE_IDENTIFIER to ensure consistency
+                      # We apply the main bundle ID to all targets to satisfy the single profile requirement
+                      content = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = .*?;', f'PRODUCT_BUNDLE_IDENTIFIER = \"com.milltech.nurmecca.app\";', content)
 
                       with open(path, 'w') as f: f.write(content)
-                      print(f'Nuclear V7 Protocol applied to: {path}')
+                      print(f'V8 Lockdown applied to: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # OMEGA PROTOCOL: Forced mapping during xcodebuild
+          # OMEGA PROTOCOL: Forced mapping with explicit identity overrides
+          # Using PRODUCT_BUNDLE_IDENTIFIER override to force SPM targets to match the profile
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -97,8 +95,8 @@ workflows:
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
+            PRODUCT_BUNDLE_IDENTIFIER="com.milltech.nurmecca.app" \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
             archive
 
       - name: Export and Post-Processing
