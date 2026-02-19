@@ -48,7 +48,7 @@ workflows:
           echo "PROV_PROFILE_UUID=$PROV_PROFILE_UUID" >> $CM_ENV
           echo "PROV_PROFILE_NAME=$PROV_PROFILE_NAME" >> $CM_ENV
           
-          # V11 ZENITH: Precise regex-based injection into Release blocks
+          # V12: ABSOLUTE BYPASS - Targeting TargetAttributes specifically
           python3 -c "
           import os, re
           uuid = '$PROV_PROFILE_UUID'
@@ -61,28 +61,34 @@ workflows:
                       path = os.path.join(root, file)
                       with open(path, 'r') as f: content = f.read()
                       
-                      # Kill Automatic Signing
-                      content = content.replace('ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;')
-                      content = re.sub(r'CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;', content)
+                      # 1. Force Manual Style for ALL targets in TargetAttributes
+                      content = re.sub(r'ProvisioningStyle = Automatic;', 'ProvisioningStyle = Manual;', content)
                       
-                      # Target Release build settings specifically
-                      pattern = r'(Release\b.*?buildSettings = \{)'
-                      replacement = r'\1\n\t\t\t\tDEVELOPMENT_TEAM = ' + team + ';\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"' + name + '\";\n\t\t\t\tPROVISIONING_PROFILE = \"' + uuid + '\";\n\t\t\t\tCODE_SIGN_STYLE = Manual;\n\t\t\t\tCODE_SIGN_IDENTITY = \"iPhone Distribution\";'
+                      # 2. Inject specific profile mapping into TargetAttributes if they exist
+                      # This ensures the 'App' target is linked to the profile name at the root level
+                      attr_pattern = r'(TargetAttributes = \{.*?\n)'
+                      attr_injection = f'\\1\t\t\t\t\tProvisioningStyle = Manual;\n\t\t\t\t\tDevelopmentTeam = {team};\n'
+                      content = re.sub(attr_pattern, attr_injection, content, flags=re.DOTALL)
+
+                      # 3. Strip all old specifiers and re-inject fresh into BuildSettings
+                      content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = .*?;', '', content)
+                      content = re.sub(r'PROVISIONING_PROFILE = .*?;', '', content)
                       
-                      content = re.sub(pattern, replacement, content, flags=re.DOTALL)
-                      
-                      # Force main bundle ID
+                      content = content.replace('buildSettings = {', 
+                        f'buildSettings = {{\n\t\t\t\tPROVISIONING_PROFILE_SPECIFIER = \"{name}\";\n\t\t\t\tPROVISIONING_PROFILE = \"{uuid}\";\n\t\t\t\tDEVELOPMENT_TEAM = {team};\n\t\t\t\tCODE_SIGN_STYLE = Manual;')
+
+                      # 4. Force Bundle ID
                       content = re.sub(r'PRODUCT_BUNDLE_IDENTIFIER = .*?;', f'PRODUCT_BUNDLE_IDENTIFIER = \"com.milltech.nurmecca.app\";', content)
 
                       with open(path, 'w') as f: f.write(content)
-                      print(f'V11 Zenith applied to: {path}')
+                      print(f'V12 Absolute Bypass applied to: {path}')
           "
 
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
           
-          # Zenith Strategy: Pass explicit signing flags and use -destination 'generic/platform=iOS'
+          # Use -allowProvisioningUpdates but pass the manual overrides as final word
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -90,17 +96,16 @@ workflows:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/ios/xcarchive/App.xcarchive \
+            -allowProvisioningUpdates \
             CODE_SIGN_STYLE=Manual \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
             PROVISIONING_PROFILE_SPECIFIER="$PROV_PROFILE_NAME" \
             PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
             clean archive
 
       - name: Export and Post-Processing
         script: |
-          # Generate the ExportOptions.plist manually to ensure absolute alignment
           cat > export_options.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
