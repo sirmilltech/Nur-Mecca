@@ -156,26 +156,27 @@ workflows:
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             archive
 
-      - name: Post-Archive Plist Injection (Binary Level Fix)
+      - name: Brute Force Plist Fixes (Binary & Recursive)
         script: |
-          # The ultimate fix: Locate the Info.plist INSIDE the xcarchive bundle and force the key in before exporting to IPA
+          # 1. Patch the binary Info.plist in the archive
           ARCHIVE_PLIST=$(find build/ios/xcarchive/App.xcarchive -name "Info.plist" | grep "Products/Applications" | head -n 1)
           if [ -n "$ARCHIVE_PLIST" ]; then
-            echo "Force-patching binary Info.plist at: $ARCHIVE_PLIST"
+            echo "Patching archive plist: $ARCHIVE_PLIST"
             /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$ARCHIVE_PLIST" || true
             /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$ARCHIVE_PLIST"
-            
-            # Verify the change
-            /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$ARCHIVE_PLIST"
-          else
-            echo "CRITICAL WARNING: Binary Info.plist not found in archive!"
           fi
+
+          # 2. Patch every single Info.plist found in the entire clone directory one last time
+          find . -name "Info.plist" -not -path "*/node_modules/*" | while read PLIST; do
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AppIcon" "$PLIST" 2>/dev/null
+          done
 
       - name: Export IPA
         script: |
           PROV_PROFILE_PATH=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name "*.mobileprovision" 2>/dev/null | head -n 1)
           PROV_PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$PROV_PROFILE_PATH"))
           
+          # Generate ExportOptions.plist
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
