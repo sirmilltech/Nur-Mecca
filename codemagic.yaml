@@ -1,6 +1,6 @@
 workflows:
   ios-workflow:
-    name: Nur-Mecca iOS Final Signing Fix V17
+    name: Nur-Mecca iOS Final Signing Fix V18
     max_build_duration: 120
     instance_type: mac_mini_m2
 
@@ -39,13 +39,11 @@ workflows:
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
           
-          # V17: Fixed Python Variable Scope
+          # V18: Export the UUID and Name to environment variables for the build step
           python3 -c "
           import os, sys, re, glob
           
-          # Pass environment variables into Python
           dev_team = os.getenv('DEVELOPMENT_TEAM', 'JBMD9M6ZPC')
-          
           profile_path = glob.glob(os.path.expanduser('~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision'))
           
           if not profile_path:
@@ -55,30 +53,22 @@ workflows:
           target_profile = profile_path[0]
           with open(target_profile, 'rb') as f:
               p_content = f.read().decode('latin-1')
-              uuid_match = re.search(r'<key>UUID</key>\s*<string>([^<]+)</string>', p_content)
-              name_match = re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', p_content)
-              
-              if not uuid_match:
-                  print('FAILURE: Could not extract UUID.')
-                  sys.exit(1)
-              
-              uuid = uuid_match.group(1)
-              name = name_match.group(1) if name_match else 'Codemagic Profile'
+              uuid = re.search(r'<key>UUID</key>\s*<string>([^<]+)</string>', p_content).group(1)
+              name = re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', p_content).group(1)
           
-          print(f'Patching with Team: {dev_team}, UUID: {uuid}, Name: {name}')
+          # Write to Codemagic environment so xcodebuild can use them
+          with open(os.getenv('CM_ENV'), 'a') as env_file:
+              env_file.write(f'\nPROVISIONING_UUID={uuid}')
+              env_file.write(f'\nPROVISIONING_NAME={name}')
 
           def patch_project(file_path):
               with open(file_path, 'r') as f:
                   content = f.read()
-              
-              # Use the dev_team variable we defined at the top
               content = re.sub(r'ProvisioningStyle = [^;]+;', 'ProvisioningStyle = Manual;', content)
               content = re.sub(r'DEVELOPMENT_TEAM = [^;]+;', f'DEVELOPMENT_TEAM = {dev_team};', content)
               content = re.sub(r'PROVISIONING_PROFILE_SPECIFIER = [^;]+;', f'PROVISIONING_PROFILE_SPECIFIER = \"{name}\";', content)
               content = re.sub(r'PROVISIONING_PROFILE = [^;]+;', f'PROVISIONING_PROFILE = \"{uuid}\";', content)
               content = re.sub(r'CODE_SIGN_IDENTITY = [^;]+;', 'CODE_SIGN_IDENTITY = \"iPhone Distribution\";', content)
-              content = re.sub(r'\"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]\" = [^;]+;', '\"CODE_SIGN_IDENTITY[sdk=iphoneos*]\" = \"iPhone Distribution\";', content)
-
               with open(file_path, 'w') as f:
                   f.write(content)
 
@@ -91,6 +81,8 @@ workflows:
       - name: Build and Archive iOS App
         script: |
           XCODE_WORKSPACE=$(find ios -name "*.xcworkspace" | head -n 1)
+          
+          # V18 Force override: passing UUID and PROVISIONING_PROFILE directly to xcodebuild
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
@@ -99,6 +91,8 @@ workflows:
             -destination 'generic/platform=iOS' \
             -archivePath build/ios/xcarchive/App.xcarchive \
             DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            PROVISIONING_PROFILE="$PROVISIONING_UUID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_NAME" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="iPhone Distribution" \
             SKIP_INSTALL=NO \
@@ -106,8 +100,6 @@ workflows:
 
       - name: Export IPA
         script: |
-          PROFILE_NAME=$(python3 -c \"import glob, os, re; p=glob.glob(os.path.expanduser('~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision'))[0]; content=open(p,'rb').read().decode('latin-1'); print(re.search(r'<key>Name</key>\s*<string>([^<]+)</string>', content).group(1))\")
-          
           cat > export_options.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -120,7 +112,7 @@ workflows:
               <key>provisioningProfiles</key>
               <dict>
                   <key>$BUNDLE_ID</key>
-                  <string>$PROFILE_NAME</string>
+                  <string>$PROVISIONING_NAME</string>
               </dict>
               <key>signingStyle</key>
               <string>manual</string>
